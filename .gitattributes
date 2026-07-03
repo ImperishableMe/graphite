@@ -1,0 +1,8 @@
+# The oblivious-hashmap planner cache (obligraph/build/hash_map.bin<blocksize>)
+# is an append-only, plain-text key->plan table written by hash_planner.hpp
+# in std::ios::app mode. Each line is `n op_num delta type [params]`, keyed by
+# {n, op_num, delta}; the loader reads every line into a std::map, so line
+# order is irrelevant and duplicate keys collapse. Using a union merge lets two
+# branches/machines that cached *different* dataset sizes both keep their lines
+# instead of conflicting — no cached plan is ever lost on merge.
+obligraph/build/hash_map.bin* merge=union text
