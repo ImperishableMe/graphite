@@ -28,10 +28,23 @@ import matplotlib.pyplot as plt
 PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 RESULTS_DIR = PROJECT_DIR / "results" / "one_hop_amortization"
 
+# Display names for the legend (the CSV/registry keys stay unchanged).
+# banking_1M is named for its 1M accounts but carries 5M edges, so label it by edges.
+DISPLAY_NAME = {"banking_1M": "banking_5M"}
+
 
 def load_csv(path: Path):
     with open(path) as f:
         return list(csv.DictReader(f))
+
+
+def fmt_edges(n: int) -> str:
+    """Human-readable edge count, e.g. 5000000 -> '5.0M', 31898238 -> '31.9M'."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K"
+    return str(n)
 
 
 def main():
@@ -57,9 +70,12 @@ def main():
         tot = [float(r["total_ms"]) for r in rows]
         per_query = float(measured[ds]["per_query_ms"])
         build_once = float(measured[ds]["build_once_ms"])
+        edges = fmt_edges(int(measured[ds]["num_edges"]))
         be = int(float(measured[ds]["breakeven_n_within10pct"]))
         color = cmap(i)
-        label = f"{ds} (build={build_once:.0f}ms, per-q={per_query:.0f}ms)"
+        name = DISPLAY_NAME.get(ds, ds)
+        label = f"{name} — {edges} edges (build={build_once:.0f}ms, per-q={per_query:.0f}ms)"
+        tot_label = f"{name} — {edges} edges"
 
         ax_amz.plot(ns, amz, "o-", color=color, label=label)
         ax_amz.axhline(per_query, color=color, ls=":", alpha=0.6)
@@ -67,7 +83,7 @@ def main():
             ax_amz.plot([be], [build_once / be + per_query], marker="*", color=color,
                         markersize=15, markeredgecolor="black", zorder=5)
 
-        ax_tot.plot(ns, tot, "o-", color=color, label=ds)
+        ax_tot.plot(ns, tot, "o-", color=color, label=tot_label)
 
     ax_amz.set_xscale("log")
     ax_amz.set_xlabel("number of one-hop queries  N  (log scale)")
