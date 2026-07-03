@@ -1,0 +1,4 @@
+dataset,num_nodes,num_edges,build_once_ms,per_query_ms,per_query_prep_ms,per_query_serve_ms,build_per_query_ratio,breakeven_n_crossover,breakeven_n_within10pct,result_rows
+aml_hi_small,515088,5078345,463.923,955.168,446.876,513.786,0.486,0.486,5,5078345
+aml_hi_medium,2077023,31898238,2177.500,6973.830,2309.100,4684.180,0.312,0.312,4,31898238
+banking_1M,1000000,5000000,901.814,1103.440,537.801,566.825,0.817,0.817,9,5000000

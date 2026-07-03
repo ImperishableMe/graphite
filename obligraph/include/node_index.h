@@ -42,4 +42,27 @@ namespace obligraph {
                  std::unique_ptr<NodeIndex> srcIndex,
                  std::unique_ptr<NodeIndex> dstIndex);
 
+    // Per-phase timings from a build-once / serve-N amortization run.
+    struct AmortizeTiming {
+        double build_once_ms = 0.0;     // buildNodeIndex — shared across ALL queries
+        std::vector<double> prep_ms;    // per-query: restore consumed edge tables + 2 fresh index copies
+        std::vector<double> serve_ms;   // per-query: initProbeSide + online probe/sort/union
+        size_t result_rows = 0;         // rows from the last served query (constant across queries)
+    };
+
+    // Build the node index ONCE, then serve `n` one-hop queries reusing it. The online
+    // path consumes (moves out) the forward/reverse edge tables and destroys the index
+    // copies it is handed, so each query must restore the edge tables from pristine
+    // copies and hand oneHop two fresh index copies (the shared index stays immutable).
+    // The shared build and each per-query phase are timed separately, physically
+    // demonstrating reuse of the offline index across many online queries. `n` is
+    // public, so the fixed-bound loop preserves obliviousness.
+    AmortizeTiming serveAmortized(Catalog& catalog, OneHopQuery& query,
+                                  ThreadPool& pool, const Table& nodeTable,
+                                  size_t edgeCount, int n);
+
+    // Print a human-readable breakdown plus a machine-parseable "AMORTIZE ..." line
+    // (build_once_ms, per-query median/mean copy/serve/total) for an amortization run.
+    void reportAmortize(const AmortizeTiming& t);
+
 } // namespace obligraph
