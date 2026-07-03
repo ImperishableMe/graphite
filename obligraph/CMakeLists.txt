@@ -95,6 +95,10 @@ target_link_libraries(banking_onehop PRIVATE core)
 add_executable(ibm_aml_onehop src/ibm_aml_onehop.cpp)
 target_link_libraries(ibm_aml_onehop PRIVATE core)
 
+# SNAP cit-Patents one-hop executable (W3, mirror of banking_onehop with patent schema)
+add_executable(snap_patents_onehop src/snap_patents_onehop.cpp)
+target_link_libraries(snap_patents_onehop PRIVATE core)
+
 # Enable testing
 enable_testing()
 

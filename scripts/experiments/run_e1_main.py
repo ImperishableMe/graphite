@@ -2,11 +2,12 @@
 """
 E1 main-result runner (chain queries only, reduced scope).
 
-Supports two workloads via --workload: `banking` (W1, default) and `aml`
-(IBM AML-Data W4). The workload selects the one-hop binary, the five chain
-queries, the obliviator src.txt converter, and the default dataset; everything
-else is workload-agnostic (sgx_app reads schema from CSV headers; the rewriter
-keys on the shared account/txn column names).
+Supports three workloads via --workload: `banking` (W1, default), `aml`
+(IBM AML-Data W4), and `snap` (SNAP cit-Patents W3). The workload selects the
+one-hop binary, the five chain queries, the obliviator src.txt converter, and
+the default dataset; everything else is workload-agnostic (sgx_app reads schema
+from CSV headers; the rewriter keys on the shared account/txn column names —
+W3/W4 deliberately reuse W1's account/txn/acc_from/acc_to naming).
 
 Compares three systems on the five chain queries at a single dataset scale:
 
@@ -55,6 +56,7 @@ Usage:
   python3 scripts/experiments/run_e1_main.py --measurement-runs 5
   python3 scripts/experiments/run_e1_main.py --queries banking_1hop,banking_3hop
   python3 scripts/experiments/run_e1_main.py --workload aml   # IBM AML-Data W4
+  python3 scripts/experiments/run_e1_main.py --workload snap  # SNAP cit-Patents W3
 """
 
 import argparse
@@ -85,6 +87,7 @@ OBL_1HOP_BIN = OBL_FK_DIR  / "obliviator_1hop_chained"
 OBL_KHOP_BIN = OBL_NFK_DIR / "obliviator_khop_chained"
 CONVERT_BANKING_1HOP = OBL_FK_DIR / "convert_banking_1hop.py"
 CONVERT_AML_1HOP = OBL_FK_DIR / "convert_aml_1hop.py"
+CONVERT_PATENTS_1HOP = OBL_FK_DIR / "convert_patents_1hop.py"
 
 # Per-workload configuration. A workload selects the one-hop binary (NebulaDB's
 # decomposed-hop driver), its CMake build target, the chain query set, the
@@ -107,6 +110,13 @@ WORKLOADS = {
         "queries": ["aml_1hop", "aml_2hop", "aml_3hop", "aml_4hop", "aml_5hop"],
         "obl_converter": CONVERT_AML_1HOP,
         "default_dataset": "ibm_aml_hi_small",
+    },
+    "snap": {
+        "onehop_bin": OBLIGRAPH_BUILD / "snap_patents_onehop",
+        "onehop_target": "snap_patents_onehop",
+        "queries": ["snap_1hop", "snap_2hop", "snap_3hop", "snap_4hop", "snap_5hop"],
+        "obl_converter": CONVERT_PATENTS_1HOP,
+        "default_dataset": "snap_patents",
     },
 }
 
@@ -398,7 +408,8 @@ def main():
     p.add_argument("--workload", default="banking", choices=sorted(WORKLOADS),
                    help="Workload family selecting the one-hop binary, chain "
                         "queries, obliviator converter, and default dataset "
-                        "(default: banking). 'aml' = IBM AML-Data W4.")
+                        "(default: banking). 'aml' = IBM AML-Data W4; "
+                        "'snap' = SNAP cit-Patents W3.")
     p.add_argument("--dataset", default=None,
                    help="Dataset name under input/plaintext/ (default: the "
                         "workload's default dataset).")
