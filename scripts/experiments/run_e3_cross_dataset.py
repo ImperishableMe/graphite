@@ -134,6 +134,8 @@ DATASETS = [
      "accounts": 515_088, "edges": 5_078_345, "anchor": 224866},
     {"label": "patents", "workload": "snap", "dir_name": "snap_patents",
      "accounts": 3_774_768, "edges": 16_518_948, "anchor": 3569342},
+    {"label": "hi_medium", "workload": "aml", "dir_name": "ibm_aml_hi_medium",
+     "accounts": 2_077_023, "edges": 31_898_238, "anchor": 118871},
     {"label": "hi_large", "workload": "aml", "dir_name": "ibm_aml_hi_large_slim",
      "obl_dir_name": "ibm_aml_hi_large",  # converter needs full txn.csv (txn_time)
      "accounts": 2_116_168, "edges": 179_702_229, "anchor": 111545,

@@ -47,6 +47,7 @@ DATASET_LABELS = {
     "banking_1M": "Banking\n(5M edges)",
     "hi_small": "AML HI-Small\n(5.1M edges)",
     "patents": "SNAP Patents\n(16.5M edges)",
+    "hi_medium": "AML HI-Medium\n(31.9M edges)",
     "hi_large": "AML HI-Large\n(180M edges)",
 }
 
