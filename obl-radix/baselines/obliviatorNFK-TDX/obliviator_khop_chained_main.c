@@ -17,9 +17,11 @@
  * covers all 2K steps uniformly.
  *
  * Schema convention (carried in .data of every elem_t):
- *   - account .data = "<account_id>,<balance>,<owner_id>"  (3 cols, key DUPLICATED in data)
- *   - txn     .data = "<txn_id>,<acc_to>,<amount>,<txn_time>"  (4 cols, key acc_from NOT in data —
- *                                                                 carried in .key only)
+ *   - account .data = "<account_id>[,<attr>…]"  (ACCT_COLS cols total, key
+ *     DUPLICATED as the first col; banking: "<account_id>,<balance>,<owner_id>")
+ *   - txn     .data = "<txn_id>,<acc_to>[,<attr>…]"  (TXN_COLS cols total,
+ *     acc_to ALWAYS the 2nd col; key acc_from NOT in data — carried in .key
+ *     only; banking: "<txn_id>,<acc_to>,<amount>,<txn_time>")
  *   - intermediate .data = prev.data + "," + next_base.data   (uniform L.data + R.data concat)
  *
  * Pre-loading the account_id into accounts' .data buys us a uniform concat rule
@@ -27,20 +29,19 @@
  * which is already in the prev intermediate's .data, so we never need to inject
  * txn's .key into the concat.
  *
- * Column indices into the cumulative concat (for next-join-key extraction):
- *   step 0 → col  4 (t1.acc_to)
- *   step 1 → col  7 (a2.account_id)
- *   step 2 → col 11 (t2.acc_to)
- *   step 3 → col 14 (a3.account_id)
- *   step 4 → col 18 (t3.acc_to)
- *   step 5 → col 21 (a4.account_id)
- *   step 6 → col 25 (t4.acc_to)
- *   step 7 → col 28 (a5.account_id)
- *   step 8 → col 32 (t5.acc_to)
- *   step 9 (last) → -1 (no next-key needed, the kernel output goes to emit)
+ * ACCT_COLS / TXN_COLS are the workload's payload widths, taken from optional
+ * CLI args (defaults 3 and 4 = the banking W1 shape; AML W4 is 2,4; SNAP
+ * patents W3 is 2,2). The next-join-key column indices into the cumulative
+ * concat are computed from them at startup:
+ *   even step (just joined txn t_k)      → col = total_cols - TXN_COLS + 1
+ *                                          (t_k.acc_to, 2nd col of the txn block)
+ *   odd  step (just joined account a_j)  → col = total_cols - ACCT_COLS
+ *                                          (a_j.account_id, 1st col of the block)
+ *   last step → -1 (no next-key needed, the kernel output goes to emit)
+ * For the banking defaults this reproduces the historical table
+ * 4,7,11,14,18,21,25,28,32.
  *
- * Final output schema (column count = 3*(K+1) + 4*K):
- *   K=2 → 17, K=3 → 24, K=4 → 31, K=5 → 38.
+ * Final output schema (column count = ACCT_COLS*(K+1) + TXN_COLS*K).
  *
  * Caveat — NFK parallel correctness:
  *   At --threads ≥ 2, the upstream NFK cross-product path produces wrong
@@ -52,12 +53,14 @@
  *   leak).
  *
  * CLI:
- *   ./obliviator_khop_chained <num_threads> <K> <src.txt> <output.csv>
+ *   ./obliviator_khop_chained <num_threads> <K> <src.txt> <output.csv> \
+ *                             [<acct_cols> <txn_cols>]
  *
  * <src.txt> is the same combined account+txn file consumed by
- * obliviator_1hop_chained (produced by convert_banking_1hop.py): header
- * "<N_acc> <N_txn>\n", then N_acc lines "<account_id> <balance>,<owner_id>",
- * then N_txn lines "<acc_from> <txn_id>,<acc_to>,<amount>,<txn_time>".
+ * obliviator_1hop_chained (produced by the workload's convert_*_1hop.py):
+ * header "<N_acc> <N_txn>\n", then N_acc lines "<account_id> <payload…>"
+ * (payload = acct_cols-1 comma-separated cols), then N_txn lines
+ * "<acc_from> <txn_id>,<acc_to>[,<payload…>]" (txn_cols comma-separated cols).
  */
 
 #include <ctype.h>
@@ -85,20 +88,26 @@ extern double scalable_oblivious_join_to_array(elem_t *arr, int length1, int len
 #define MAX_HOPS 5
 #define MIN_HOPS 2
 
-/* Pre-computed column index of the next-join-key in the cumulative concat
- * after each step, indexed by step number (0..2*MAX_HOPS-1). Last step uses -1. */
-static const int NEXT_KEY_COL[2 * MAX_HOPS] = {
-    4,   /* step 0 → t1.acc_to */
-    7,   /* step 1 → a2.account_id */
-    11,  /* step 2 → t2.acc_to */
-    14,  /* step 3 → a3.account_id */
-    18,  /* step 4 → t3.acc_to */
-    21,  /* step 5 → a4.account_id */
-    25,  /* step 6 → t4.acc_to */
-    28,  /* step 7 → a5.account_id */
-    32,  /* step 8 → t5.acc_to */
-    -1,  /* step 9 → last step, no next key */
-};
+/* Column index of the next-join-key in the cumulative concat after each step,
+ * indexed by step number (0..2*MAX_HOPS-1). Filled at startup from the
+ * workload's payload widths (acct_cols, txn_cols); the last step uses -1.
+ * For the banking defaults (3,4) this reproduces the historical table
+ * 4,7,11,14,18,21,25,28,32,-1. */
+static int NEXT_KEY_COL[2 * MAX_HOPS];
+
+static void fill_next_key_cols(int num_steps, int acct_cols, int txn_cols) {
+    int total = acct_cols; /* the chain starts as a1's columns */
+    for (int step = 0; step < num_steps; step++) {
+        if (step % 2 == 0) {
+            total += txn_cols;                        /* joined txn t_k     */
+            NEXT_KEY_COL[step] = total - txn_cols + 1; /* t_k.acc_to (2nd)  */
+        } else {
+            total += acct_cols;                       /* joined account a_j */
+            NEXT_KEY_COL[step] = total - acct_cols;    /* a_j.account_id    */
+        }
+    }
+    NEXT_KEY_COL[num_steps - 1] = -1; /* last step: output goes to emit */
+}
 
 static void *start_thread_work(void *arg) { (void)arg; thread_start_work(); return NULL; }
 static void die(const char *msg) { fprintf(stderr, "%s\n", msg); exit(2); }
@@ -301,11 +310,15 @@ static void build_header(char *buf, size_t cap, int K) {
 
 /* ----- main -------------------------------------------------------------- */
 int main(int argc, char **argv) {
-    if (argc != 5) {
+    if (argc != 5 && argc != 7) {
         fprintf(stderr,
-                "usage: %s <num_threads> <K> <src.txt> <output.csv>\n"
+                "usage: %s <num_threads> <K> <src.txt> <output.csv> [<acct_cols> <txn_cols>]\n"
                 "  K is the hop count (number of transactions in the chain).\n"
-                "  Valid range: %d..%d. For K=1 use obliviator_1hop_chained.\n",
+                "  Valid range: %d..%d. For K=1 use obliviator_1hop_chained.\n"
+                "  acct_cols/txn_cols are the comma-column counts of the account\n"
+                "  and txn .data payloads (defaults 3 and 4 = banking W1;\n"
+                "  AML W4: 2 4; SNAP patents W3: 2 2). acc_to must be the txn\n"
+                "  payload's 2nd column.\n",
                 argv[0], MIN_HOPS, MAX_HOPS);
         return 1;
     }
@@ -313,6 +326,16 @@ int main(int argc, char **argv) {
     int K = atoi(argv[2]);
     const char *src_path = argv[3];
     const char *out_csv  = argv[4];
+    int acct_cols = 3, txn_cols = 4; /* banking W1 shape */
+    if (argc == 7) {
+        acct_cols = atoi(argv[5]);
+        txn_cols  = atoi(argv[6]);
+        if (acct_cols < 1 || txn_cols < 2) {
+            fprintf(stderr, "error: acct_cols must be >= 1 and txn_cols >= 2 "
+                            "(got %d, %d)\n", acct_cols, txn_cols);
+            return 1;
+        }
+    }
 
     if (K == 1) {
         fprintf(stderr,
@@ -332,6 +355,7 @@ int main(int argc, char **argv) {
     total_num_threads = num_threads;
 
     int num_steps = 2 * K;
+    fill_next_key_cols(num_steps, acct_cols, txn_cols);
 
     if (scalable_oblivious_join_init((int)num_threads) != 0) die("join init failed");
     thread_system_init();
@@ -350,6 +374,7 @@ int main(int argc, char **argv) {
     }
     printf("Kernel:  NFK  (non-foreign-key, general equi-join)\n");
     printf("Hops:    K=%d  (%d pairwise steps)\n", K, num_steps);
+    printf("Payload: acct_cols=%d txn_cols=%d\n", acct_cols, txn_cols);
 
     /* ============================================================
      * Off-clock: load src.txt and split into master copies.
