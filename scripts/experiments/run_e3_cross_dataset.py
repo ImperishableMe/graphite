@@ -390,6 +390,53 @@ def generate_banking_dataset(spec, data_root: Path, log_file):
 
 
 # ---------------------------------------------------------------------------
+# Output writers (called after every cell so partial results are always on
+# disk — a sweep interrupted mid-way still leaves a plottable summary.csv)
+# ---------------------------------------------------------------------------
+
+RAW_FIELDS = ["system", "dataset", "workload", "query", "edges", "run_id",
+              "is_warmup", "total_ms", "onehop_ms", "mwj_ms", "output_rows"]
+
+
+def write_raw_csv(rows, path: Path):
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=RAW_FIELDS)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+
+def write_summary_csv(rows, path: Path):
+    by_cell = {}
+    for r in rows:
+        if r["is_warmup"]:
+            continue
+        by_cell.setdefault((r["system"], r["dataset"]), []).append(r)
+    with open(path, "w", newline="") as f:
+        sw = csv.DictWriter(f, fieldnames=[
+            "system", "dataset", "workload", "query", "edges", "n_runs",
+            "median_ms", "min_ms", "max_ms", "stddev_ms", "output_rows",
+        ])
+        sw.writeheader()
+        for (system, dataset), cell in sorted(by_cell.items()):
+            base = {"system": system, "dataset": dataset,
+                    "workload": cell[0]["workload"], "query": cell[0]["query"],
+                    "edges": cell[0]["edges"]}
+            totals = [c["total_ms"] for c in cell if c["total_ms"] is not None]
+            if not totals:
+                sw.writerow({**base, "n_runs": 0, "median_ms": "", "min_ms": "",
+                             "max_ms": "", "stddev_ms": "",
+                             "output_rows": cell[0]["output_rows"]})
+                continue
+            sw.writerow({**base, "n_runs": len(totals),
+                         "median_ms": statistics.median(totals),
+                         "min_ms": min(totals), "max_ms": max(totals),
+                         "stddev_ms": (statistics.stdev(totals)
+                                       if len(totals) >= 2 else 0.0),
+                         "output_rows": cell[0]["output_rows"]})
+
+
+# ---------------------------------------------------------------------------
 # Main sweep
 # ---------------------------------------------------------------------------
 
@@ -669,44 +716,12 @@ def main():
                             "mwj_ms": cell_mwj_ms,
                             "output_rows": cell_rows,
                         })
+                        # Keep partial results on disk after every cell.
+                        write_raw_csv(rows, raw_csv_path)
+                        write_summary_csv(rows, summary_csv_path)
 
-    fieldnames = ["system", "dataset", "workload", "query", "edges", "run_id",
-                  "is_warmup", "total_ms", "onehop_ms", "mwj_ms", "output_rows"]
-    with open(raw_csv_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
-
-    # summary.csv (measurement runs only)
-    by_cell = {}
-    for r in rows:
-        if r["is_warmup"]:
-            continue
-        by_cell.setdefault((r["system"], r["dataset"]), []).append(r)
-
-    with open(summary_csv_path, "w", newline="") as f:
-        sw = csv.DictWriter(f, fieldnames=[
-            "system", "dataset", "workload", "query", "edges", "n_runs",
-            "median_ms", "min_ms", "max_ms", "stddev_ms", "output_rows",
-        ])
-        sw.writeheader()
-        for (system, dataset), cell in sorted(by_cell.items()):
-            base = {"system": system, "dataset": dataset,
-                    "workload": cell[0]["workload"], "query": cell[0]["query"],
-                    "edges": cell[0]["edges"]}
-            totals = [c["total_ms"] for c in cell if c["total_ms"] is not None]
-            if not totals:
-                sw.writerow({**base, "n_runs": 0, "median_ms": "", "min_ms": "",
-                             "max_ms": "", "stddev_ms": "",
-                             "output_rows": cell[0]["output_rows"]})
-                continue
-            sw.writerow({**base, "n_runs": len(totals),
-                         "median_ms": statistics.median(totals),
-                         "min_ms": min(totals), "max_ms": max(totals),
-                         "stddev_ms": (statistics.stdev(totals)
-                                       if len(totals) >= 2 else 0.0),
-                         "output_rows": cell[0]["output_rows"]})
+    write_raw_csv(rows, raw_csv_path)
+    write_summary_csv(rows, summary_csv_path)
 
     meta["ended_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     with open(meta_path, "w") as f:
