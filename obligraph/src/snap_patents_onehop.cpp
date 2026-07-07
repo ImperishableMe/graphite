@@ -1,13 +1,15 @@
 /**
- * ibm_aml_onehop.cpp
+ * snap_patents_onehop.cpp
  *
- * Driver program to run one-hop join on the IBM AML-Data workload (W4).
- * Mirror of banking_onehop.cpp with schema adjusted for AML: account table
- * has (account_id, bank_id) and txn has (txn_id, acc_from, acc_to, amount,
- * txn_time, currency, payment_format, is_laundering).
+ * Driver program to run one-hop join on the SNAP cit-Patents workload (W3).
+ * Mirror of ibm_aml_onehop.cpp with schema adjusted for patents: the account
+ * table has (account_id, gyear, cat, claims) and txn (citations) has
+ * (txn_id, acc_from, acc_to). Patents map to `account`, citations map to `txn`
+ * (citing patent = acc_from, cited patent = acc_to) so the rest of the E1
+ * pipeline (rewriter, sgx_app schema-from-header import) is reused unchanged.
  *
  * Usage:
- *   ./ibm_aml_onehop <data_dir> <output_csv> [--report CATS] [--threads N]
+ *   ./snap_patents_onehop <data_dir> <output_csv> [--report CATS] [--threads N]
  *
  *   --report <cats>   Comma-separated list of timing categories to sum for
  *                     the TIMING_REPORTED line (default: ONLINE).
@@ -65,32 +67,6 @@ static vector<string> splitComma(const string& s) {
     return out;
 }
 
-// Build the column type list for an import from the CSV header alone: every
-// column is declared int32 (the only type this workload uses) and named after
-// the header field. This lets one binary parse both the full 8-column txn.csv
-// and the slim 4-column txn.csv without recompiling — the column count and
-// names are public schema, so this is oblivious-safe. importEdge/NodeFromCSV
-// take the column *names* from the header anyway and only use this list for the
-// per-column types and the count.
-static vector<pair<string, string>> int32SchemaFromHeader(const string& path) {
-    ifstream in(path);
-    if (!in.is_open())
-        throw runtime_error("Cannot open file to read header: " + path);
-    string headerLine;
-    if (!getline(in, headerLine))
-        throw runtime_error("File has no header row: " + path);
-    // Strip a trailing CR so Windows-style line endings don't taint the last name.
-    if (!headerLine.empty() && headerLine.back() == '\r')
-        headerLine.pop_back();
-
-    vector<pair<string, string>> schema;
-    for (const string& name : splitComma(headerLine))
-        schema.emplace_back(name, "int32");
-    if (schema.empty())
-        throw runtime_error("Empty header row in: " + path);
-    return schema;
-}
-
 int main(int argc, char* argv[]) {
     if (argc < 3) {
         cerr << "Usage: " << argv[0] << " <data_dir> <output_csv> [--report CATS] [--threads N]\n"
@@ -104,7 +80,6 @@ int main(int argc, char* argv[]) {
     string outputPath = argv[2];
     vector<string> reportCats = {"ONLINE"};
     int nthreadsOverride = 0;  // 0 = unset, fall back to hardware_concurrency()
-    int serveN = 1;            // 1 = normal single-query path; >=2 = amortization mode
 
     for (int i = 3; i < argc; i++) {
         string arg = argv[i];
@@ -116,18 +91,10 @@ int main(int argc, char* argv[]) {
             nthreadsOverride = std::stoi(argv[++i]);
         } else if (arg.rfind("--threads=", 0) == 0) {
             nthreadsOverride = std::stoi(arg.substr(10));
-        } else if (arg == "--serve" && i + 1 < argc) {
-            serveN = std::stoi(argv[++i]);
-        } else if (arg.rfind("--serve=", 0) == 0) {
-            serveN = std::stoi(arg.substr(8));
         }
     }
     if (nthreadsOverride < 0) {
         cerr << "--threads must be > 0 (got " << nthreadsOverride << ")\n";
-        return 1;
-    }
-    if (serveN < 1) {
-        cerr << "--serve must be >= 1 (got " << serveN << ")\n";
         return 1;
     }
 
@@ -145,20 +112,18 @@ int main(int argc, char* argv[]) {
             TimedScope ts("CSV read (account)", "IO");
             catalog.importNodeFromCSV(
                 dataDir + "/account.csv", ',',
-                int32SchemaFromHeader(dataDir + "/account.csv"),
+                {{"account_id", "int32"}, {"gyear", "int32"},
+                 {"cat", "int32"}, {"claims", "int32"}},
                 "account_id"
             );
         }
         {
             TimedScope ts("CSV read (txn)", "IO");
-            // Schema is derived from the txn.csv header so the same binary parses
-            // both the full 8-column txn (txn_id,acc_from,acc_to,amount,txn_time,
-            // currency,payment_format,is_laundering) and the slim 4-column txn
-            // (txn_id,acc_from,acc_to,amount). 8 int32 cols = 32 B, 4 = 16 B,
-            // both within ROW_DATA_MAX_SIZE (48). acc_from/acc_to remain the keys.
+            // 3 int32 columns = 12 bytes; combined hop row (account 4 + txn 3 +
+            // account 4 = 11 cols = 44 bytes) stays within ROW_DATA_MAX_SIZE (48).
             catalog.importEdgeFromCSV(
                 dataDir + "/txn.csv", ',',
-                int32SchemaFromHeader(dataDir + "/txn.csv"),
+                {{"txn_id", "int32"}, {"acc_from", "int32"}, {"acc_to", "int32"}},
                 "account", "txn", "account",
                 "acc_from", "acc_to"
             );
@@ -169,19 +134,6 @@ int main(int argc, char* argv[]) {
         ThreadPool pool(nthreads);
         Table& accountTable = catalog.getTable("account");
         size_t edgeCount = catalog.getTable("txn_fwd").rowCount;
-
-        // --- Amortization mode: build index once, serve N reusing queries. ---
-        if (serveN > 1) {
-            OneHopQuery query(
-                "account", "txn", "account",
-                vector<pair<string, vector<Predicate>>>{}
-            );
-            cout << "Amortization mode: build once, serve " << serveN << " queries...\n";
-            AmortizeTiming at = serveAmortized(catalog, query, pool,
-                                               accountTable, edgeCount, serveN);
-            reportAmortize(at);
-            return 0;
-        }
 
         unique_ptr<NodeIndex> nodeIndex;
         {

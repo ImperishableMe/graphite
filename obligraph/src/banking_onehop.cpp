@@ -10,6 +10,10 @@
  *                     TIMING_REPORTED line (default: ONLINE).
  *                     Categories: IO, OFFLINE, ONLINE
  *   --threads <N>     Override the thread count (default: std::thread::hardware_concurrency()).
+ *   --serve <N>       Amortization mode: build the node index ONCE, then serve N
+ *                     one-hop queries reusing it (fresh copies per query, since
+ *                     probing is destructive). Prints an "AMORTIZE ..." summary and
+ *                     skips writing the result CSV. N >= 2 enables this mode.
  */
 
 #include <iostream>
@@ -76,6 +80,7 @@ int main(int argc, char* argv[]) {
     string outputPath = argv[2];
     vector<string> reportCats = {"ONLINE"};
     int nthreadsOverride = 0;  // 0 = unset, fall back to hardware_concurrency()
+    int serveN = 1;            // 1 = normal single-query path; >=2 = amortization mode
 
     for (int i = 3; i < argc; i++) {
         string arg = argv[i];
@@ -87,10 +92,18 @@ int main(int argc, char* argv[]) {
             nthreadsOverride = std::stoi(argv[++i]);
         } else if (arg.rfind("--threads=", 0) == 0) {
             nthreadsOverride = std::stoi(arg.substr(10));
+        } else if (arg == "--serve" && i + 1 < argc) {
+            serveN = std::stoi(argv[++i]);
+        } else if (arg.rfind("--serve=", 0) == 0) {
+            serveN = std::stoi(arg.substr(8));
         }
     }
     if (nthreadsOverride < 0) {
         cerr << "--threads must be > 0 (got " << nthreadsOverride << ")\n";
+        return 1;
+    }
+    if (serveN < 1) {
+        cerr << "--serve must be >= 1 (got " << serveN << ")\n";
         return 1;
     }
 
@@ -130,6 +143,19 @@ int main(int argc, char* argv[]) {
         ThreadPool pool(nthreads);
         Table& accountTable = catalog.getTable("account");
         size_t edgeCount = catalog.getTable("txn_fwd").rowCount;
+
+        // --- Amortization mode: build index once, serve N reusing queries. ---
+        if (serveN > 1) {
+            OneHopQuery query(
+                "account", "txn", "account",
+                vector<pair<string, vector<Predicate>>>{}
+            );
+            cout << "Amortization mode: build once, serve " << serveN << " queries...\n";
+            AmortizeTiming at = serveAmortized(catalog, query, pool,
+                                               accountTable, edgeCount, serveN);
+            reportAmortize(at);
+            return 0;
+        }
 
         unique_ptr<NodeIndex> nodeIndex;
         {

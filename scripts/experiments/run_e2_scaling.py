@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-E2 data-scaling runner (Banking W1 or IBM AML W4).
+E2 data-scaling runner (Banking W1, IBM AML W4, or SNAP cit-Patents W3).
 
-Sweeps how latency scales with dataset size. Two workloads via --workload:
-`banking` (W1, default) and `aml` (IBM AML-Data W4: HI-Small/Medium/Large).
+Sweeps how latency scales with dataset size. Three workloads via --workload:
+`banking` (W1, default), `aml` (IBM AML-Data W4: HI-Small/Medium/Large), and
+`snap` (SNAP cit-Patents W3: a single full-graph scale, latency-vs-hop).
 The workload selects the one-hop binary, the size table, the chain query set,
-whether datasets are auto-generated (banking) or downloaded+converted (aml),
-and the default systems (banking: nebuladb+full_mwj; aml: nebuladb only).
+whether datasets are auto-generated (banking) or downloaded+converted (aml,
+snap), and the default systems (banking: nebuladb+full_mwj; aml/snap: nebuladb
+only).
 
 Queries: one or more chain hops (--queries, default per workload). Hops are
 looped *within* each dataset; on OOM/timeout at hop K for a dataset, that
@@ -130,6 +132,17 @@ AML_SIZES = [
      "dir_name_slim": "ibm_aml_hi_large_slim"},
 ]
 
+# --- SNAP cit-Patents W3 size table (downloaded + converted, NOT auto-generated;
+# single full-graph scale — SNAP is not subsampled). `anchor_bank` here holds the
+# a1.account_id start node (patents anchor on a node id, not bank_id; ANCHOR_RE
+# matches both column names). NebulaDB latency is dominated by the oblivious sort
+# over the full 16.5M-edge hop table, so this is a latency-vs-hop point at one
+# scale rather than a multi-size sweep. ---
+SNAP_SIZES = [
+    {"label": "patents", "dir_name": "snap_patents",
+     "accounts": 3_774_768, "edges": 16_518_948, "anchor_bank": 3569342},
+]
+
 # DEFAULT_SYSTEMS run on a plain invocation. full_mwj_no_filter (unfiltered
 # full MWJ via `sgx_app --no-filter`) is opt-in: its output explodes with both
 # hop count and dataset size and OOMs at the larger sizes by design.
@@ -161,6 +174,15 @@ WORKLOADS = {
         "sizes": AML_SIZES,
         "queries": ["aml_1hop", "aml_2hop", "aml_3hop", "aml_4hop", "aml_5hop"],
         "default_queries": ["aml_2hop", "aml_3hop", "aml_4hop", "aml_5hop"],
+        "default_systems": ["nebuladb"],
+        "generate": False,
+    },
+    "snap": {
+        "onehop_bin": OBLIGRAPH_BUILD / "snap_patents_onehop",
+        "onehop_target": "snap_patents_onehop",
+        "sizes": SNAP_SIZES,
+        "queries": ["snap_1hop", "snap_2hop", "snap_3hop", "snap_4hop", "snap_5hop"],
+        "default_queries": ["snap_2hop", "snap_3hop", "snap_4hop", "snap_5hop"],
         "default_systems": ["nebuladb"],
         "generate": False,
     },
@@ -465,7 +487,9 @@ def main():
                    help="Workload family selecting the one-hop binary, size "
                         "table, chain queries, dataset handling, and default "
                         "systems (default: banking). 'aml' = IBM AML-Data W4 "
-                        "(datasets downloaded/converted; NebulaDB-focused).")
+                        "(HI-Small/Medium/Large); 'snap' = SNAP cit-Patents W3 "
+                        "(single full-graph scale). Both downloaded/converted "
+                        "and NebulaDB-focused.")
     p.add_argument("--queries", default=None,
                    help="Comma-separated chain queries; hops are looped within "
                         "each dataset (so an OOM at hop K skips that dataset's "

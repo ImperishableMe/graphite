@@ -1,11 +1,13 @@
 #include <set>
 #include <unordered_map>
+#include <algorithm>
 #include <iostream>
 #include <future>
 #include <thread>
 #include <cassert>
 #include <bit>
 #include <cstring>
+#include <chrono>
 #include <random>
 
 #include "xxhash.h"
@@ -543,5 +545,95 @@ namespace obligraph {
         }
         applyFilterAndProject(edgeProjectedFwd, query, pool);
         return edgeProjectedFwd;
+    }
+
+    AmortizeTiming serveAmortized(Catalog& catalog, OneHopQuery& query,
+                                  ThreadPool& pool, const Table& nodeTable,
+                                  size_t edgeCount, int n) {
+        using clk = std::chrono::steady_clock;
+        auto ms = [](clk::time_point a, clk::time_point b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        AmortizeTiming t;
+
+        // --- Shared, ONCE: build the node index (the amortizable offline cost). ---
+        auto b0 = clk::now();
+        std::unique_ptr<NodeIndex> nodeIndex = buildNodeIndex(nodeTable, edgeCount);
+        t.build_once_ms = ms(b0, clk::now());
+
+        // The online path MOVES the forward/reverse edge tables out of the catalog
+        // (std::move in buildSourceAndEdgeTables / buildDestinationTable), consuming
+        // them. Keep pristine copies so every query starts from identical inputs, and
+        // restore them by vector index each query — a moved-from table loses its name,
+        // so it can no longer be found via getTable(). Node tables are only read.
+        auto indexOf = [&](const std::string& nm) -> size_t {
+            for (size_t i = 0; i < catalog.tables.size(); ++i)
+                if (catalog.tables[i].name == nm) return i;
+            throw std::runtime_error("serveAmortized: table not found: " + nm);
+        };
+        const size_t fwdIdx = indexOf(query.edgeTableName + "_fwd");
+        const size_t revIdx = indexOf(query.edgeTableName + "_rev");
+        const Table fwdPristine = catalog.tables[fwdIdx];   // deep copy, offline (once)
+        const Table revPristine = catalog.tables[revIdx];
+
+        // --- Per query: restore consumed inputs + fresh index copies (prep), then probe.
+        //     nodeIndex stays immutable so it is reused across every query. Loop bound
+        //     n is public — work per iteration is data-independent. ---
+        t.prep_ms.reserve(n);
+        t.serve_ms.reserve(n);
+        for (int i = 0; i < n; ++i) {
+            auto c0 = clk::now();
+            catalog.tables[fwdIdx] = fwdPristine;   // restore forward edges
+            catalog.tables[revIdx] = revPristine;   // restore reverse edges
+            auto srcIndex = std::make_unique<NodeIndex>(*nodeIndex);
+            auto dstIndex = std::make_unique<NodeIndex>(*nodeIndex);
+            auto c1 = clk::now();
+            Table result = oneHop(catalog, query, pool,
+                                  std::move(srcIndex), std::move(dstIndex));
+            auto c2 = clk::now();
+            t.prep_ms.push_back(ms(c0, c1));
+            t.serve_ms.push_back(ms(c1, c2));
+            t.result_rows = result.rowCount;
+        }
+        return t;
+    }
+
+    void reportAmortize(const AmortizeTiming& t) {
+        const size_t n = t.serve_ms.size();
+        auto median = [](std::vector<double> v) {
+            if (v.empty()) return 0.0;
+            std::sort(v.begin(), v.end());
+            size_t m = v.size() / 2;
+            return (v.size() % 2) ? v[m] : 0.5 * (v[m - 1] + v[m]);
+        };
+        auto mean = [](const std::vector<double>& v) {
+            if (v.empty()) return 0.0;
+            double s = 0.0;
+            for (double x : v) s += x;
+            return s / static_cast<double>(v.size());
+        };
+        std::vector<double> total(n);
+        for (size_t i = 0; i < n; ++i) total[i] = t.prep_ms[i] + t.serve_ms[i];
+
+        const double prepMed = median(t.prep_ms);
+        const double serveMed = median(t.serve_ms);
+        const double totalMed = median(total);
+        const double totalMean = mean(total);
+
+        std::cout << "\n=== AMORTIZE (build-once / serve-N) ===\n"
+                  << "  build_once (buildNodeIndex, SHARED across all queries): "
+                  << t.build_once_ms << " ms\n"
+                  << "  per-query median of " << n << ": prep(edge restore + index copy x2) = "
+                  << prepMed << " ms + serve(initProbeSide+online) = " << serveMed
+                  << " ms = " << totalMed << " ms\n"
+                  << "  result rows (constant per query): " << t.result_rows << "\n";
+        // Machine-parseable summary line.
+        std::cout << "AMORTIZE serve_n=" << n
+                  << " build_once_ms=" << t.build_once_ms
+                  << " per_query_total_median_ms=" << totalMed
+                  << " per_query_total_mean_ms=" << totalMean
+                  << " per_query_prep_median_ms=" << prepMed
+                  << " per_query_serve_median_ms=" << serveMed
+                  << " result_rows=" << t.result_rows << "\n";
     }
 } // namespace obligraph
