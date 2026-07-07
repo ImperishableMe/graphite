@@ -32,6 +32,25 @@ bitonic stitch by `txn_id`. It is kept as an alternative reference, but
 is **not** the default. Only use it when the user explicitly says
 "join-sort baseline" or names it directly.
 
+## Experiment Comparison Systems — Canonical Naming (July 2026)
+
+Exactly **three** systems are compared in the experiments (E1 chain sweep and
+all derived plots/tables). No code rename was performed — the runner's internal
+system keys stay as-is; the rules below apply to **presentation**: plot legends,
+axis/series labels, table headers, and any reported output.
+
+1. **Graphite** — our system (decomposed one-hop + rewritten-query pipeline).
+   Internal runner key: `nebuladb`. In ALL plots and experiment outputs, always
+   label it **Graphite**, never "NebulaDB".
+2. **Obliviator chained** — the obliviator k-hop chained baseline
+   (`obliviator_1hop_chained` for 1 hop, `obliviator_khop_chained` for ≥2 hops).
+   Internal runner key: `obliviator_chained`.
+3. **Full multiway oblivious join (Full MWJ)** — `sgx_app` on the full chain
+   query **without the filter** (`--no-filter`). Internal runner key:
+   `full_mwj_no_filter`. The unfiltered mode is the natural/default Full MWJ:
+   label it plainly "Full MWJ" (no "no-filter" qualifier), and do NOT run or
+   report the filtered `full_mwj` variant.
+
 # ============== CRITICAL RULES (MUST FOLLOW) ==============
 
 ## Obliviousness Guarantee (NEVER BREAK)
