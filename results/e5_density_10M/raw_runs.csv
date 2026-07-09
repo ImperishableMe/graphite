@@ -1,0 +1,13 @@
+system,dataset,hub_fraction,query,accounts,edges,unfiltered_2hop_rows,filtered_2hop_rows,run_id,is_warmup,total_ms,onehop_ms,mwj_ms,output_rows,rows_match
+nebuladb,uniform,0.0,banking_2hop,2000000,10000000,47227107,17,1,0,91755.097,1079.075,90676.022,17,1
+obliviator_chained,uniform,0.0,banking_2hop,2000000,10000000,47227107,17,1,0,146531.89800000002,,,47227107,1
+full_mwj_no_filter,uniform,0.0,banking_2hop,2000000,10000000,47227107,17,1,0,1232563.654,,1232563.654,47227107,1
+nebuladb,low,0.1,banking_2hop,2000000,10000000,103714693,496,1,0,90817.61,1137.973,89679.637,496,1
+obliviator_chained,low,0.1,banking_2hop,2000000,10000000,103714693,496,1,0,,,,TIMEOUT,
+full_mwj_no_filter,low,0.1,banking_2hop,2000000,10000000,103714693,496,1,0,2628684.5360000003,,2628684.5360000003,103714693,1
+nebuladb,medium,0.2,banking_2hop,2000000,10000000,242493946,1137,1,0,92005.788,1102.221,90903.567,1137,1
+obliviator_chained,medium,0.2,banking_2hop,2000000,10000000,242493946,1137,1,0,,,,TIMEOUT,
+full_mwj_no_filter,medium,0.2,banking_2hop,2000000,10000000,242493946,1137,1,0,,,,OOM,
+nebuladb,high,0.35,banking_2hop,2000000,10000000,720806166,1963,1,0,91224.84,1059.523,90165.317,1963,1
+obliviator_chained,high,0.35,banking_2hop,2000000,10000000,720806166,1963,1,0,,,,OOM,
+full_mwj_no_filter,high,0.35,banking_2hop,2000000,10000000,720806166,1963,1,0,,,,OOM,

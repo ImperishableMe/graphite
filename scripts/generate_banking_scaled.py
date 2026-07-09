@@ -20,6 +20,7 @@ Example:
 import argparse
 import bisect
 import csv
+import json
 import random
 from collections import defaultdict
 from pathlib import Path
@@ -225,6 +226,145 @@ def generate_transactions_streaming(account_ids, num_transactions, output_dir, b
         print(f"Generated {num_transactions:,} transactions (streaming mode)")
 
 
+def generate_transactions_streaming_e5(num_accounts, num_transactions, output_dir,
+                                       hub_fraction, hub_count, anchor,
+                                       anchor_out_degree, quiet=False):
+    """E5 density-variant transaction generator (streaming).
+
+    See docs/e5_output_sensitivity.md. Holds row counts fixed while varying
+    degree concentration:
+      - The hub_count highest account ids are designated hubs.
+      - Every background edge endpoint (source and destination independently)
+        is redirected to a uniformly random hub with probability hub_fraction;
+        otherwise source ~ Zipf(1.5) and destination ~ uniform, both over
+        non-hub ids.
+      - The anchor account is excluded from background draws and planted last
+        with exactly anchor_out_degree out-edges whose destinations follow the
+        destination distribution conditioned on out-degree >= 1 (guarantees a
+        non-empty filtered 2-hop result at hub_fraction = 0).
+
+    (acc_from, acc_to) uniqueness and no-self-loop constraints match the
+    default generator. Returns a stats dict with the exact unfiltered and
+    anchor-filtered 2-hop output sizes (ground truth for the E5 sweep).
+    """
+    first_hub = num_accounts - hub_count + 1
+    hub_ids = list(range(first_hub, num_accounts + 1))
+    background_ids = [i for i in range(1, first_hub) if i != anchor]
+
+    sampler = ZipfianSampler(background_ids, alpha=1.5)
+    seen_pairs = set()
+    out_degree = defaultdict(int)
+    in_degree = defaultdict(int)
+    exhausted_sources = set()
+    # Distinct destinations reachable per source: every background id except
+    # itself, plus — only when hub_fraction > 0 — the hubs (at p=0 draw_dest
+    # never proposes a hub, so counting hubs here would leave the Zipf head
+    # account spinning forever in the destination-rejection loop once it has
+    # consumed every reachable destination).
+    if hub_fraction > 0:
+        max_out = len(background_ids) + hub_count - 1
+    else:
+        max_out = len(background_ids) - 1
+
+    def draw_source():
+        if hub_fraction > 0 and random.random() < hub_fraction:
+            return random.choice(hub_ids)
+        return sampler.sample()
+
+    def draw_dest():
+        if hub_fraction > 0 and random.random() < hub_fraction:
+            return random.choice(hub_ids)
+        return random.choice(background_ids)
+
+    num_background = num_transactions - anchor_out_degree
+    filepath = output_dir / 'txn.csv'
+    fieldnames = ['txn_id', 'acc_from', 'acc_to', 'amount', 'txn_time']
+
+    with open(filepath, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, lineterminator='\n')
+        writer.writeheader()
+
+        written = 0
+        while written < num_background:
+            acc_from = draw_source()
+            while acc_from in exhausted_sources:
+                acc_from = draw_source()
+
+            acc_to = acc_from
+            while acc_to == acc_from or (acc_from, acc_to) in seen_pairs:
+                acc_to = draw_dest()
+
+            seen_pairs.add((acc_from, acc_to))
+            out_degree[acc_from] += 1
+            in_degree[acc_to] += 1
+            if out_degree[acc_from] >= max_out:
+                exhausted_sources.add(acc_from)
+
+            written += 1
+            writer.writerow({
+                'txn_id': written,
+                'acc_from': acc_from,
+                'acc_to': acc_to,
+                'amount': random.randint(MIN_AMOUNT, MAX_AMOUNT),
+                'txn_time': random.randint(MIN_TIMESTAMP, MAX_TIMESTAMP),
+            })
+            if not quiet and written % 1_000_000 == 0:
+                print(f"  Written {written:,}/{num_background:,} background transactions")
+
+        # Plant the anchor's out-edges: destinations from the destination
+        # distribution conditioned on out_degree >= 1.
+        anchor_dests = []
+        while len(anchor_dests) < anchor_out_degree:
+            d = draw_dest()
+            if out_degree[d] == 0 or d == anchor or (anchor, d) in seen_pairs:
+                continue
+            seen_pairs.add((anchor, d))
+            out_degree[anchor] += 1
+            in_degree[d] += 1
+            anchor_dests.append(d)
+            written += 1
+            writer.writerow({
+                'txn_id': written,
+                'acc_from': anchor,
+                'acc_to': d,
+                'amount': random.randint(MIN_AMOUNT, MAX_AMOUNT),
+                'txn_time': random.randint(MIN_TIMESTAMP, MAX_TIMESTAMP),
+            })
+
+    # Exact 2-hop ground truth (chain query joins on the middle account).
+    unfiltered_2hop = sum(in_degree[a] * out_degree.get(a, 0) for a in in_degree)
+    filtered_2hop = sum(out_degree[d] for d in anchor_dests)
+    hub_hub_pairs = sum(1 for (s, d) in seen_pairs if s >= first_hub and d >= first_hub)
+
+    stats = {
+        'num_accounts': num_accounts,
+        'num_transactions': num_transactions,
+        'hub_fraction': hub_fraction,
+        'hub_count': hub_count,
+        'first_hub_id': first_hub,
+        'anchor': anchor,
+        'anchor_out_degree': anchor_out_degree,
+        'anchor_dests': sorted(anchor_dests),
+        'anchor_dest_out_degrees': sorted(
+            (out_degree[d] for d in anchor_dests), reverse=True),
+        'unfiltered_2hop_rows': unfiltered_2hop,
+        'filtered_2hop_rows': filtered_2hop,
+        'max_out_degree': max(out_degree.values()),
+        'max_in_degree': max(in_degree.values()),
+        'max_hub_out_degree': max(
+            (out_degree.get(h, 0) for h in hub_ids), default=0),
+        'hub_hub_pairs': hub_hub_pairs,
+    }
+
+    if not quiet:
+        print(f"Generated {num_transactions:,} transactions (E5 streaming mode)")
+        print(f"  unfiltered 2-hop rows : {unfiltered_2hop:,}")
+        print(f"  filtered  2-hop rows  : {filtered_2hop:,} (anchor {anchor})")
+        print(f"  hub-hub pairs         : {hub_hub_pairs:,}")
+
+    return stats
+
+
 def validate_data(accounts, transactions):
     """Validate foreign key constraints and data bounds."""
     account_ids = {acc['account_id'] for acc in accounts}
@@ -256,7 +396,35 @@ def main():
                         help='Use streaming mode for memory-efficient generation of large datasets')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress detailed output (for parallel execution)')
+    # E5 density-variant flags (docs/e5_output_sensitivity.md). Default off:
+    # without --plant-anchor the generator behaves exactly as before.
+    parser.add_argument('--plant-anchor', type=int, default=None, metavar='ID',
+                        help='E5 mode: plant this account id with a fixed '
+                             'out-degree (--anchor-out-degree) and emit '
+                             'stats.json with exact 2-hop output sizes')
+    parser.add_argument('--anchor-out-degree', type=int, default=5,
+                        help='Planted out-degree of the anchor account '
+                             '(E5 mode, default: 5)')
+    parser.add_argument('--hub-fraction', type=float, default=0.0,
+                        help='E5 mode: probability that each edge endpoint is '
+                             'redirected to a random hub (default: 0.0)')
+    parser.add_argument('--hub-count', type=int, default=1000,
+                        help='E5 mode: number of hub accounts, the highest '
+                             'account ids (default: 1000)')
     args = parser.parse_args()
+
+    e5_mode = args.plant_anchor is not None
+    if not e5_mode and args.hub_fraction > 0:
+        parser.error('--hub-fraction requires --plant-anchor (E5 mode)')
+    if e5_mode:
+        if not (0.0 <= args.hub_fraction < 1.0):
+            parser.error('--hub-fraction must be in [0, 1)')
+        if not (0 < args.hub_count < args.num_accounts):
+            parser.error('--hub-count must be in (0, num_accounts)')
+        first_hub = args.num_accounts - args.hub_count + 1
+        if not (1 <= args.plant_anchor < first_hub):
+            parser.error(f'--plant-anchor must be a non-hub account id '
+                         f'(1 <= id < {first_hub})')
 
     num_accounts = args.num_accounts
     output_dir = args.output_dir
@@ -308,7 +476,18 @@ def main():
 
     account_ids = [acc['account_id'] for acc in accounts]
 
-    if streaming:
+    if e5_mode:
+        # E5 density variant: always streaming, emits stats.json ground truth.
+        stats = generate_transactions_streaming_e5(
+            num_accounts, num_transactions, output_dir,
+            args.hub_fraction, args.hub_count, args.plant_anchor,
+            args.anchor_out_degree, quiet=quiet)
+        stats['seed'] = args.seed
+        with open(output_dir / 'stats.json', 'w') as f:
+            json.dump(stats, f, indent=2)
+        if not quiet:
+            print(f"E5 stats written to {output_dir / 'stats.json'}")
+    elif streaming:
         # Streaming mode: write directly to file
         generate_transactions_streaming(account_ids, num_transactions, output_dir, quiet=quiet)
     else:
