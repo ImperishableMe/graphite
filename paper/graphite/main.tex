@@ -14,7 +14,7 @@
     Bib\TeX}}}
 
 \newcommand\algoIndent[1]{%
-  \linebreak\hspace*{\dimexpr\algorithmicindent*#1}%
+  \newline\hspace*{\dimexpr\algorithmicindent*#1}%
 }
 
 \newtheorem{definition}{Definition}
@@ -30,12 +30,18 @@
 \newcommand{\vision}[1]{{[\color{green} VISION: #1]}}
 \newcommand{\onehop}{\texttt{one-hop}\xspace}
 \newcommand{\Onehop}{\texttt{One-hop}\xspace}
-\newcommand{\system}{GoblDB\xspace}
+\newcommand{\system}{Graphite\xspace}
 \newcommand{\ie}{i.e.,\xspace}
 \newcommand{\eg}{e.g.,\xspace}
 \newcommand{\etal}{et al.\xspace}
 \newcommand{\gdbs}{GDBs\xspace}
+\newcommand{\ohts}{\textsf{OHashTables}\xspace}
+\newcommand{\oht}{\textsf{OHashTable}\xspace}
+\newcommand{\cmpset}{\textsc{OCmpSet}\xspace}
 \newcommand{\wei}{the WK Scheme\xspace}
+\newcommand{\Wei}{The WK Scheme\xspace}
+
+\newcommand{\sujaya}[1]{{\color{magenta} \footnotesize[Sujaya: #1] }}
 
 %%
 %% end of the preamble, start of the body of the document source.
@@ -50,15 +56,19 @@
 %% Keywords. The author(s) should pick words that accurately describe
 %% the work being presented. Separate the keywords with commas.
 % \keywords{Oblivious databases, graph databases, doubly oblivious, oblivious graph query processing, hardware enclaves}
+\input{abstract}
 \maketitle
 
 \input{introduction}
 \input{background_and_problem_definition}
 \input{system_architecture}
 \input{one_hop}
+\input{query_decomposition}
+\input{oblivious_band_join}
+\input{security}
 %\input{system_data_model}
 % \input{graph_query_processing}
-\input{rest}
+\input{evaluations}
 %\input{conclusion}
 
 % \section*{Acknowledgements}

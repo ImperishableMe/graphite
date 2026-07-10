@@ -1,0 +1,273 @@
+\section{Oblivious Multi-way Join with Filters}
+\label{sec:bandjoin}
+
+The residual query produced by \Cref{sec:decomposition} joins $k$ hop-relations
+on their shared node ids and evaluates predicate filters on node
+and edge properties. A natural extension of \wei to support filtered joins would treat
+filtering as a post-processing step: materialize the full join output of
+size $\mathit{OUT}_{\mathit{join}}$, then apply predicates to produce the
+final result of size $\mathit{OUT}_{\mathit{filtered}}$. Schemes that
+explicitly support filtering, such as
+Obliviator~\cite{mavrogiannakis2025obliviator}, Opaque~\cite{zheng2017opaque}, and
+ObliDB~\cite{eskandarian2019oblidb}, follow this
+approach, revealing both sizes to the adversary and allocating memory
+proportional to the unfiltered join output, \textit{which for selective
+predicates can be orders of magnitude larger than the final result}.
+
+
+\system avoids this by integrating filtering directly into the
+multiplicity computation of \wei. Recall from
+\Cref{sec:background:joins} that \wei associates every tuple with a final
+multiplicity $\alpha_{\mathit{final}}$ --- the number of times it appears
+in the output --- and that all downstream multiplicities are products. We
+observe that a
+tuple with $\alpha_{\mathit{final}} = 0$ also flows through every phase
+identically to any other tuple: same memory accesses, same loop bounds,
+same allocations. It simply expands to zero output rows in the expansion
+phase, contributing nothing to the result.
+
+\noindent\textbf{Filter as multiplicity.}
+Each \onehop operator produces a hop relation of publicly known size $|E_e|$ in
+which every row carries a boolean flag indicating whether that row passes
+the query predicates (\Cref{sec:onehop}). When this hop relation enters
+\wei as a leaf, we initialize its local multiplicity as:
+\[
+\alpha_{\mathit{local}}(t) =
+\begin{cases}
+1 & \text{if } t\text{'s filter flag is set,} \\
+0 & \text{otherwise.}
+\end{cases}
+\]
+Because all multiplicities propagate as products up and down the join
+tree, a single $0$ at any tuple \textit{zeroes out its entire contribution to}
+$\alpha_{\mathit{final}}$. A tuple that fails a filter never participates
+in any output row, exactly as if it had been removed --- but it is never
+actually removed, and no branch or allocation ever reflects its absence.
+The adversary observes only $\mathit{OUT}_{\mathit{filtered}}$, the size
+of the final filtered result, and never learns the size the join would
+have produced without filtering.
+
+\noindent\textbf{Correctness.} The modified initialization is the only
+change to \wei's pipeline. All other phases --- bottom-up, top-down,
+expansion, and alignment --- proceed identically. A tuple that fails a
+filter has $\alpha_{\mathit{final}} = 0$ and expands to zero rows;
+a tuple that passes has its multiplicity computed exactly as in the
+unfiltered join. The output is therefore identical to first joining and
+then filtering.
+
+\noindent\textbf{Obliviousness.} Since $\alpha_{\mathit{local}}$ is
+initialized from a flag stored inside the tuple rather than from any
+branching on the tuple's value, the memory access pattern of every
+phase remains a function of the input sizes and $\mathit{OUT}_{\mathit{filtered}}$
+alone. No intermediate count
+is allocated, computed, or revealed.
+
+\noindent\textbf{Applicability.} The same technique applies to any
+multiplicity-based oblivious join scheme. Obliviator~\cite{mavrogiannakis2025obliviator},
+for instance, explicitly reveals both the join output size and the
+filtered output size as separate public quantities. Replacing its
+post-join filter with the multiplicity initialization above collapses
+these two leakages into one, revealing only
+$\mathit{OUT}_{\mathit{filtered}}$. The modification requires no
+structural change to the underlying join algorithm.
+
+% \section{The Oblivious Multi-Way Band Join, Step by Step}
+% \label{sec:bandjoin}
+
+
+% The residual query produced by the decomposition of \Cref{sec:decomposition} is
+% evaluated by the oblivious multi-way join engine \wei
+% (\Cref{sec:background:joins}). This section walks through that engine
+% operationally, at the level of detail needed to follow the remainder of the
+% paper. We first restate the one invariant the whole construction is built to
+% preserve, then introduce the \emph{multiplicity} abstraction that drives it, and
+% finally trace the four phases end to end on a small example. Throughout, we
+% generalize from equality joins to \emph{band} joins, the form \system actually
+% needs.
+
+% %------------------------------------------------------------------------------
+% \subsection{What ``oblivious'' must mean here}
+% \label{sec:bandjoin:invariant}
+% %------------------------------------------------------------------------------
+
+% Under our threat model (\Cref{sec:background:threat}), the adversary observes the
+% full sequence of memory accesses, the control flow, and the size of every
+% allocation. The join is \emph{oblivious} when all of this observable behavior is
+% a function of only three \emph{public} quantities:
+% \begin{enumerate}[label=(\roman*),leftmargin=2.2em,itemsep=2pt]
+%   \item the sizes of the input relations $|R_1|,\dots,|R_k|$;
+%   \item the size of the output, $\mathit{OUT}$; and
+%   \item the query itself --- its schema, predicates, and join tree.
+% \end{enumerate}
+% No branch, loop bound, array index, or buffer size may depend on a \emph{value}
+% inside a tuple, nor on any intermediate count (such as how many tuples match a
+% given key). The challenge the algorithm solves is to compute a join --- an
+% inherently data-dependent operation --- while letting only these three public
+% quantities show through. Every phase below meets this bar by replacing
+% data-dependent control flow with two fixed-shape primitives: the \emph{oblivious
+% sort} (osort), whose comparison network is fixed by the input length alone, and
+% the \emph{linear scan}, a single left-to-right pass that applies the same
+% branchless update to every adjacent pair of tuples.
+
+% %------------------------------------------------------------------------------
+% \subsection{The central abstraction: multiplicities}
+% \label{sec:bandjoin:multiplicity}
+% %------------------------------------------------------------------------------
+
+% The engine never materializes an intermediate join. Instead it computes, for
+% every input tuple $t$, a single integer: the number of rows of the \emph{final}
+% result in which $t$ participates. We call this its final multiplicity
+% $\alpha_{\mathit{final}}(t)$. Once these numbers are known, producing the output
+% is mechanical --- copy each tuple $\alpha_{\mathit{final}}(t)$ times and line the
+% copies up --- so the entire difficulty is reduced to computing multiplicities
+% obliviously.
+
+% Two facts make this abstraction powerful. First, $\alpha_{\mathit{final}}$
+% factors along the join tree: a tuple's count in the whole join is its count
+% within its own subtree times the count contributed by the rest of the tree.
+% This is what lets the engine compute it in two sweeps --- one up the tree, one
+% down. Second, because each output row contains exactly one tuple from each
+% relation, the multiplicities of any single relation sum to $\mathit{OUT}$;
+% summing $\alpha_{\mathit{final}}$ over a relation is how the engine learns the
+% (public) output size without ever inspecting a value.
+
+% \paragraph{Band predicates.}
+% A child tuple $c$ matches a parent tuple $p$ not on equality but on a
+% \emph{band}: $c.\mathit{key} \in [\,p.\mathit{key}+\delta_1,\ p.\mathit{key}+\delta_2\,]$,
+% where $\delta_1,\delta_2$ are constants of the predicate (equality is the special
+% case $\delta_1=\delta_2=0$, and one-sided inequalities use $\pm\infty$ bounds).
+% The engine handles a band with a \emph{boundary} technique: for each parent
+% tuple it emits two marker tuples, a \textsc{start} at $p.\mathit{key}+\delta_1$
+% and an \textsc{end} at $p.\mathit{key}+\delta_2$. After an osort on the key,
+% every child that matches $p$ falls between $p$'s two markers, so the number of
+% matches is the difference of two running counts read off at the markers --- a
+% quantity a single linear scan computes for all parents at once.
+
+% %------------------------------------------------------------------------------
+% \subsection{The four phases}
+% \label{sec:bandjoin:phases}
+% %------------------------------------------------------------------------------
+
+% Given the join tree, the engine runs four phases in order. The first two compute
+% multiplicities; the last two turn them into output. We describe each by its
+% \emph{goal}, its \emph{mechanism}, and what it \emph{leaves behind}.
+
+% \paragraph{Phase 1 --- Bottom-up: local multiplicities.}
+% \emph{Goal.} Give every tuple $t$ its local multiplicity
+% $\alpha_{\mathit{local}}(t)$: the number of partial results it participates in
+% within the subtree rooted at its relation.
+% \emph{Mechanism.} Every leaf tuple starts at $\alpha_{\mathit{local}}=1$. The
+% engine then visits parent--child pairs in post-order. For each pair it
+% concatenates the two relations (the parent expanded into \textsc{start}/\textsc{end}
+% boundary tuples), osorts on the join key so matching children are bracketed by
+% their parent's markers, and runs a linear scan that accumulates, for each parent
+% tuple, the sum of its matching children's multiplicities. Multiplying in this
+% contribution updates the parent's $\alpha_{\mathit{local}}$.
+% \emph{Leaves behind.} After the sweep reaches the root, each tuple carries the
+% size of the join of its own subtree. At the root specifically,
+% $\alpha_{\mathit{local}}=\alpha_{\mathit{final}}$, since the root's subtree is the
+% whole tree.
+
+% \paragraph{Phase 2 --- Top-down: final multiplicities.}
+% \emph{Goal.} Turn every tuple's local multiplicity into its final multiplicity
+% $\alpha_{\mathit{final}}$ --- its count in the \emph{entire} join, not just its
+% subtree.
+% \emph{Mechanism.} Starting from the root (whose count is already final), the
+% engine visits parent--child pairs in pre-order. Using the same
+% concatenate--osort--scan machinery, but with the predicate read in the opposite
+% direction, it pushes each parent's final count down to its children, distributing
+% it across the matching children in proportion to their local multiplicities.
+% \emph{Leaves behind.} Every tuple in every relation now carries
+% $\alpha_{\mathit{final}}$, together with an offset that records where its copies
+% belong in the output (used for alignment in Phase 4).
+
+% \paragraph{Phase 3 --- Distribute-and-expand: replicate each tuple.}
+% \emph{Goal.} Physically realize the counts: each relation must become a buffer in
+% which tuple $t$ appears exactly $\alpha_{\mathit{final}}(t)$ times, padded to its
+% output length.
+% \emph{Mechanism.} A linear scan over a relation takes the prefix sum of
+% $\alpha_{\mathit{final}}$, which gives both each tuple's destination offset and
+% the relation's output size $\mathit{OUT}$. Tuples with count zero contribute
+% nothing and are discarded; the survivors are scattered to their offsets by a
+% fixed sequence of power-of-two ``distribute'' passes, leaving padding gaps
+% between groups, and a final linear scan copies each tuple rightward to fill its
+% gap. The number and stride of these passes depend only on $\mathit{OUT}$.
+% \emph{Leaves behind.} Every relation in the tree now has exactly $\mathit{OUT}$
+% rows, with each tuple occupying as many consecutive slots as its multiplicity.
+
+% \paragraph{Phase 4 --- Align-and-merge: assemble the result.}
+% \emph{Goal.} Glue the expanded relations together so that row $i$ holds a single,
+% consistent combination of one tuple from each relation --- i.e.\ the $i$-th join
+% result.
+% \emph{Mechanism.} Walking the tree from the root, the engine osorts each child by
+% an \emph{alignment key} derived from the offset recorded in Phase 2, so that the
+% child's copies land in the same row order as the partial result they extend. It
+% then concatenates the child's columns onto the accumulating result with a single
+% lockstep pass over the two equal-length buffers.
+% \emph{Leaves behind.} The accumulated relation at the root is the materialized
+% join, of size $\mathit{OUT}$.
+
+% %------------------------------------------------------------------------------
+% \subsection{A worked example}
+% \label{sec:bandjoin:example}
+% %------------------------------------------------------------------------------
+
+% Consider a two-relation equality join with parent $P=\{p_1,p_2\}$ and child
+% $C=\{c_1,c_2,c_3\}$, where $p_1$ matches $c_1,c_2$ and $p_2$ matches $c_3$.
+
+% \begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+%   \item \textbf{Phase 1.} Leaves $c_1,c_2,c_3$ start at
+%         $\alpha_{\mathit{local}}=1$. The bottom-up scan over the $P$--$C$ pair
+%         finds two matching children under $p_1$ and one under $p_2$, giving
+%         $\alpha_{\mathit{local}}(p_1)=2$, $\alpha_{\mathit{local}}(p_2)=1$. As
+%         root, these are already final.
+%   \item \textbf{Phase 2.} Pushing the parents' counts down,
+%         $\alpha_{\mathit{final}}(c_1)=\alpha_{\mathit{final}}(c_2)=
+%         \alpha_{\mathit{final}}(c_3)=1$. Note both relations' multiplicities sum
+%         to $3=\mathit{OUT}$.
+%   \item \textbf{Phase 3.} $P$ expands to $[p_1,p_1,p_2]$ and $C$ to
+%         $[c_1,c_2,c_3]$, each of length $3$.
+%   \item \textbf{Phase 4.} Aligning $C$ against $P$ and concatenating yields the
+%         three result rows $(p_1,c_1),(p_1,c_2),(p_2,c_3)$.
+% \end{itemize}
+
+% %------------------------------------------------------------------------------
+% \subsection{Why the pipeline is oblivious}
+% \label{sec:bandjoin:obliviousness}
+% %------------------------------------------------------------------------------
+
+% Every step above is one of three shapes: an osort whose network is fixed by the
+% buffer length, a linear scan that touches every adjacent pair identically, or a
+% distribute pass whose strides are fixed by $\mathit{OUT}$. None branches on a
+% tuple's value, and none allocates a buffer sized by an intermediate count: the
+% only sizes that ever appear are the input lengths, the per-relation output length
+% $\mathit{OUT}$, and constants of the query. A tuple that matches nothing is not
+% skipped --- it is carried along as a full-width record and silently dropped only
+% when its zero multiplicity makes it padding in Phase 3. The pipeline therefore
+% leaks exactly the three public quantities of
+% \Cref{sec:bandjoin:invariant} and nothing more.
+
+% %------------------------------------------------------------------------------
+% \subsection{Oblivious Multi-Way Band Join with Filter}
+% \label{sec:bandjoin:filter}
+% %------------------------------------------------------------------------------
+
+% The multi-way band join is driven entirely by multiplicities, not by
+% deleting or keeping rows:
+% \begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+%   \item \textbf{Bottom-up} computes each tuple's $\alpha_{\mathit{local}}$ (how
+%         many times it matches within its subtree). We simply set
+%         $\alpha_{\mathit{local}}=0$ for entries that do not pass the node filter.
+%   \item \textbf{Top-down} combines these into $\alpha_{\mathit{final}}$ (the
+%         total result rows the tuple participates in).
+%   \item \textbf{Distribute-and-expand} replicates each tuple
+%         $\alpha_{\mathit{final}}$ times.
+%   \item \textbf{Align-and-merge} stitches the replicated tuples into the result.
+% \end{itemize}
+
+% A tuple with $\alpha_{\mathit{local}}=0$ flows through every phase identically:
+% same memory accesses, same loop bounds, same allocations --- but because all
+% downstream multiplicities are products, a single $0$ zeroes out its
+% $\alpha_{\mathit{final}}$, so it expands to $0$ output rows. That is the entire
+% trick: filtering is just zeroing a multiplicity, and the obliviousness falls out
+% for free because nothing is skipped or resized.

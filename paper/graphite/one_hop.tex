@@ -1,0 +1,259 @@
+%==============================================================================
+\section{The \Onehop Operator}
+\label{sec:onehop}
+%==============================================================================
+
+
+This section presents the \onehop operator that computes the output for a 
+single-hop pattern $n_i \rightarrow e \rightarrow n_j$ within an acyclic 
+graph query. Specifically, given a source node $n_i(id, [prop])$ and destination 
+node $n_j(id, [prop])$ connected by edge label $e$, each with its properties, 
+the \onehop operator returns all tuples $(n_i, e, n_j)$, whose output size is 
+bounded by $|e|$. The two nodes may be of the same or different types.
+Additionally, \onehop marks output tuples that satisfy the query predicates 
+$p_s$, $p_e$, and/or $p_d$ with a flag, leaving non-matching tuples unmarked. 
+This flagging mechanism is central to hiding intermediate result sizes, as we 
+describe in []. The \onehop operator reveals no information 
+beyond the sizes of the source node table, destination node table, and the 
+edge list --- all of which are public in our threat model.
+
+
+Recall that similar to plaintext \gdbs~\cite{janusgraph, feng2023kuzu, 
+deutsch2019tigergraph, sun2015sqlgraph}, \system also stores two versions of each 
+edge list but without revealing the graph structure: a \textit{forward list} 
+$E_F$ sorted by source node ids and a \textit{reverse list} $E_R$ sorted by 
+destination node ids, both of size $|e|$.
+The \onehop operator exploits both lists to parallelize one-hop query 
+processing. We first describe a plaintext algorithm and then identify its 
+leakages, which motivate our oblivious design.
+
+
+\noindent\textbf{Plaintext algorithm.}
+A natural plaintext approach proceeds as follows. Inspired by hash joins, 
+store source node entries in a hash table and probe it once per entry in 
+$E_F$, attaching matching source properties to each edge; the destination side
+is handled symmetrically against $E_R$ in parallel. Then, sort one of the lists,
+say $E_R$ on source ids, and merge the two lists row-wise, combining source node,
+edge, and destination node properties into the output tuple. Finally, apply 
+predicate filters on the source, destination, and edge properties, retaining 
+only tuples that pass. This enables bidirectional parallel processing of the 
+traversal.
+
+\noindent\textbf{Leakages.}
+The plaintext algorithm above has three sources of leakage that make it 
+non-oblivious:
+\begin{enumerate}[leftmargin=*]
+    \item \textit{Hash table access pattern.} Hash table construction and probing
+    reveals for each probe whether a match occurred and, if so, at which location,
+    exposing which node ids appear in the edge list.
+
+    \item \textit{Node degree.} A node id appears in the edge list once per 
+    incident edge, so high-degree nodes are probed repeatedly. The number 
+    of repeated probes to the same id reveals the degree distribution and 
+    thus the graph structure.
+
+    \item \textit{Predicate selectivity.} Filtering the merged output on 
+    node and edge predicates reveals how many tuples satisfy predicates, 
+    leaking the selectivity of query predicate values.
+\end{enumerate}
+
+We design the \onehop operator to retain the bidirectional parallelism of 
+the plaintext algorithm while provably eliminating all three leakages.
+
+
+% This
+% creates two problems. First, the oblivious hash table we build [refer this] on permits each
+% key to be queried \emph{at most once}, so repeated probes for the same source
+% would violate its security precondition. Second, even setting that aside, the
+% number of probes for a given id would equal that id's degree, directly exposing
+% the graph's degree distribution. The operator resolves both by probing each
+% distinct key \emph{exactly once} and then obliviously propagating the retrieved
+% attributes to the remaining edges that share that key, so the access pattern
+% depends only on $|E|$ --- never on any node's degree.
+
+
+% An oblivious \onehop must hide three sources of leakage. First,
+% \emph{hash-bucket access}: the memory pattern of retrieving a node's attributes
+% by id would expose which key was probed. Second, \emph{node degree}: as pointed above, the number
+% of source-side (or destination-side) lookups for a given id would equal its
+% degree, leaking the degree distribution of the graph. Third, \emph{predicate
+% selectivity}: the number of edges that satisfy the query predicates would reveal
+% how many tuples match. The algorithm below neutralizes the first two by
+% construction; the third is handled by always emitting $|E|$ rows and deferring
+% any selectivity-dependent sizing, as we discuss at the end of the section.
+
+%------------------------------------------------------------------------------
+\subsection{\Onehop Algorithm}
+\label{sec:onehop:algorithm}
+
+
+We address the three leakages in order and present the operator in Algorithm~\ref{alg:onehop}.
+
+\noindent\textbf{Addressing leakage 1: Hash table access pattern.}
+Our algorithm stores source and destination node information in oblivious 
+hash tables (\ohts). Our implementation utilizes H2O2RAM~\cite{zheng2025h2o2ram}
+but the operator can use any \oht.
+\ohts ensure that both table construction and probing are oblivious: the 
+access pattern depends only on the input size, not on the values stored, and 
+probing reveals neither whether a match was found nor the location of any 
+matched entry. Note that \oht construction requires unique input keys, which is satisfied 
+here since node ids used as keys for both source and destination tables
+are unique by definition. However, \ohts do not protect against \emph{repeated probes 
+of the same key} --- if the same node id is probed multiple times due to its 
+degree in the edge list, that repetition remains visible. Node degree leakage 
+therefore persists and is addressed next. 
+
+\noindent\textit{Offline/online separation.}
+\oht construction is generally expensive. For example, H2O2RAM's build complexity 
+ranges from $O(n\log^2 n)$ for small tables to 
+$O(n\log^2\log n)$ for large ones~\cite{zheng2025h2o2ram}. We observe, 
+however, that in our operator the hash table acts as a \emph{index}
+built on node entries and then probed by edge entries at query time. 
+This means index construction can occur \emph{offline}, before any query 
+arrives. Furthermore, once an index is built for nodes $n_i$ and $n_j$ 
+paired with edge label $e$, it can be reused across all queries over the 
+same node-edge combination, amortizing the construction cost. Note that 
+the same \oht cannot be reused across different edge labels without 
+reconstruction, so one index is required per $(n, e)$ pair. Changes to
+a node or an edge also requires a reconstruction.
+
+
+
+
+\begin{algorithm*}[t]
+\caption{Oblivious \onehop Operator}
+\label{alg:onehop}
+\begin{algorithmic}[1]
+\Require Forward list $E_{\!f}$ (sorted by $src\_id$), reverse list $E_{\!r}$
+         (sorted by $dst\_id$); precomputed indices $H_S$, $H_D$; optional
+         predicates $P$
+\Ensure  Result $R$ with $|R| = |E|$
+\Statex
+\State \textbf{Source branch} \Comment{concurrent with the destination branch}
+\State $\textsc{Dedup}(E_{\!f})$: for each row $i$,\algoIndent{1}
+       $E_{\!f}[i].k \gets \textsc{OCmpSet}\big(E_{\!f}[i].src\_id = E_{\!f}[i\!-\!1].src\_id,\ \bot,\ E_{\!f}[i].src\_id\big)$
+\State for each row $i$: probe $H_S[E_{\!f}[i].k]$ \Comment{all $|E|$ rows; dummy keys are no-ops}
+\State $\textsc{Redup}(E_{\!f})$: for each row $i$,\algoIndent{1}
+       $E_{\!f}[i].sattr \gets \textsc{OCmpSet}\big(E_{\!f}[i].k = \bot,\ E_{\!f}[i\!-\!1].sattr,\ E_{\!f}[i].sattr\big)$
+\State $\textsc{Merge}(E_{\!f}, \text{source attributes})$ \Comment{attach source columns}
+\Statex
+\State \textbf{Destination branch} \Comment{symmetric over $dst\_id$, $H_D$}
+\State $\textsc{Dedup}$ / probe $H_D$ / $\textsc{Redup}$ / $\textsc{Merge}$ on $E_{\!r}$
+\State $E_{\!r} \gets \textsc{OSort}(E_{\!r})$ into edge order \Comment{re-align to source branch}
+\Statex
+\State \textbf{Combine}
+\State $R \gets \textsc{Merge}(E_{\!f}, E_{\!r})$ \Comment{column-wise, aligned per edge}
+\If{$P \neq \emptyset$} \Comment{standalone query only; skipped under decomposition}
+    \State $R \gets \textsc{OCompact}\big(\text{rows of } R \text{ satisfying } P\big)$
+\EndIf
+\State \Return $R$
+\end{algorithmic}
+\end{algorithm*}
+
+\noindent\textbf{Addressing leakage 2: Node degree.}
+Since \ohts cannot protect against repeated probes to the same node id, the 
+\onehop operator addresses node degree leakage as the first step of online 
+processing. The key idea is to \emph{deduplicate} $E_F$ (and $E_R$ in 
+parallel), replacing all but the first occurrence of each node id with a 
+dummy, so that each distinct node id is probed exactly once.
+
+Deduplication exploits the fact that $E_F$ is already sorted by source id 
+and $E_R$ by destination id. A linear scan over each list compares each 
+entry with its predecessor and replaces repeated ids with dummies using 
+\cmpset, leaving the first occurrence of each distinct id as the only real
+entry per run.
+
+We then probe the hash table index \emph{once per row}, including dummies.
+A dummy key 
+resolves to a no-op that the table absorbs, while a real key retrieves its 
+node attributes and appends them to the edge attributes. Probing every row, 
+rather than only real ones, fixes the 
+total probe count at $|E|$ regardless of the degree distribution, necessary
+for maintaining obliviousness. 
+\emph{Reduplication} then restores suppressed rows. Specifically,
+a second linear scan 
+propagates, via \cmpset, the retrieved attributes from each real row forward 
+into all subsequent dummy rows in the same run, so every edge row ends up 
+annotated with its source (or destination) node attributes. 
+
+The source-side branch produces an annotated edge list ordered by $src\_id$, 
+while the destination-side branch produces one ordered by $dst\_id$. To 
+align them for merging, we obliviously sort the destination list by $src\_id$. 
+A final \textsc{Merge} then combines the two lists row-wise, attaching both 
+source and destination node attributes to each edge entry. This single 
+re-alignment sort is the only oblivious sort in the entire \onehop operator.
+
+\noindent\textbf{Addressing leakage 3: Predicate selectivity.}
+To hide predicate selectivity, the operator linearly scans the merged list 
+and annotates each row with a boolean flag indicating whether it satisfies 
+the query predicates. What happens next depends on the operator's role in 
+the query:
+
+\begin{itemize}[leftmargin=*]
+    \item {Standalone query.} The algorithm obliviously compacts the 
+    flagged list and returns the result to the user. The output size equals 
+    the final query result size, which is public under our threat model.
+
+    \item {Component of a larger query.} Compaction is \emph{not} 
+    performed. The output remains exactly $|E|$ rows, keeping intermediate sizes 
+    independent of predicate 
+    selectivity. The boolean flags are preserved for the downstream 
+    multi-way join, which uses them to hide the final output size, as 
+    discussed in [].
+\end{itemize}
+
+In both cases, the adversary learns nothing about how many rows satisfy the 
+predicates until the final result size is deliberately released. \hfill$\Box$
+
+
+
+% \paragraph{Two branches over the pre-sorted lists.}
+% Because the forward and reverse edge lists are already maintained in sorted order
+% (\Cref{sec:background:graph}), the operator needs no online sort to group edges by
+% key --- the grouping comes for free from the storage layout. The source branch
+% consumes the forward list and the destination branch the reverse list, and the
+% two run concurrently on independent working copies.
+
+% \paragraph{Deduplicate, probe, reduplicate.}
+% Within a branch, \emph{deduplication} enforces the single-query-per-key
+% constraint: in a linear scan over the sorted list, we compare each row's key with
+% its predecessor and, using \textsc{OCmpSet}, obliviously replace it with a dummy
+% ($\bot$) whenever the two match. Exactly one row per distinct key, the first in
+% its run, keeps a live key. We then probe the index \emph{once for every row},
+% dummies included; a dummy key resolves to a no-op the table absorbs, while live
+% keys retrieve their node attributes. Probing every row, rather than only the live
+% ones, keeps the query count equal to $|E|$ regardless of the graph's degree
+% distribution; probing only live keys would let the query count leak the number of
+% distinct sources. \emph{Reduplication} then refills the suppressed rows: a second
+% scan copies, via \textsc{OCmpSet}, the probed attributes from the preceding row
+% whenever the current key is a dummy, propagating each run's attributes forward. A
+% \textsc{Merge} attaches the retrieved node attributes to the edge rows as new
+% columns.
+
+% \paragraph{Align and combine.}
+% The source branch finishes in $src\_id$ order, but the destination branch finishes
+% in $dst\_id$ order; we therefore oblivious-sort the destination branch back into
+% the same per-edge order so the two $|E|$-row tables align row-for-row. A final
+% \textsc{Merge} then combines them column-wise, giving every edge both its source
+% and destination attributes. This single re-alignment is the operator's only online
+% sort.
+
+% \paragraph{Filtering.}
+% When the operator answers a standalone one-hop query, we evaluate the predicates
+% $P$ over every row after the combine and obliviously compact the matches; the
+% result size is the query's (public) output size. When the operator instead serves
+% as a building block under query decomposition (\Cref{sec:decomposition}), no
+% predicates are applied here, and hence, the output remains exactly $|E|$ rows, keeping
+% intermediate sizes independent of selectivity.
+
+%------------------------------------------------------------------------------
+% Alternatives considered (closes the section).
+%------------------------------------------------------------------------------
+The one-hop pattern could in principle be evaluated as two sequential 
+oblivious binary joins using an operator such as 
+Obliviator~\cite{mavrogiannakis2025obliviator}, at equal security but with 
+two full join executions and an intermediate materialization. Our operator 
+replaces this with one pass of probes per side and a single re-alignment 
+sort, yielding a $1.1$--$1.7\times$ latency improvement over the two-join 
+baseline (\Cref{sec:evaluation}).
+

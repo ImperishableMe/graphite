@@ -1,0 +1,124 @@
+\section{Introduction}
+
+A financial investigator queries a cloud-hosted transaction graph: find all 
+accounts reachable within three hops from a set of flagged entities. The data 
+is encrypted, and the query executes inside a Trusted Execution Environment 
+(TEE) --- hardware that prevents the cloud provider from reading any data 
+values. Yet an adversary watching memory access patterns during query execution 
+can still reconstruct which accounts were touched, infer node degrees, and 
+trace the investigator's interest, all without decrypting any data. 
+
+TEEs provide hardware-level isolation that protects data \emph{values} from the 
+cloud provider, and have emerged as the leading approach for confidential cloud 
+computation. But they do not protect \emph{access patterns}. An adversary 
+observing which memory addresses a query touches, in what order and with what 
+frequency, can infer the graph's structure, reconstruct query predicates, and in 
+some cases recover significant portions of the underlying 
+data~\cite{islam2012access, grubbs2019learning, kellaris2016generic, 
+kornaropoulos2019data, cash2015leakage, demertzis2020seal, grubbs2018pump, 
+gui2019encrypted, lacharite2018improved, oya2021hiding, poddar2020practical, 
+zhang2016all, oya2022ihop}. For regulated industries handling financial or 
+healthcare data, this residual leakage may lead to compliance failure.
+
+The solution is \emph{oblivious} computation: algorithms whose memory access 
+patterns and control flow are provably independent of the input data. The 
+challenge is executing this efficiently for property graph queries. Graph 
+traversal is structurally leaky by nature: multi-hop queries, which follow 
+chains of node-edge-node patterns across the graph, expose intermediate fanout 
+at every step. A standard hash join reveals node degrees through its probe 
+pattern. While Oblivious RAM 
+(ORAM)~\cite{goldreich1987towards, stefanov2013path} can be used to hide 
+individual accesses, it introduces logarithmic overhead per operation, making 
+it impractical for multi-hop query workloads at scale. Prior approaches ~\cite{chamani2023graphos, 
+feng2025enabling} address oblivious graph \emph{algorithms}, such as BFS, DFS, 
+minimum spanning tree, but these differ fundamentally from the selective, 
+predicate-driven queries that property graph databases execute in practice. 
+Adapting oblivious relational join 
+operators~\cite{krastnikov2020efficient, zheng2017opaque, 
+eskandarian2019oblidb, arasu2013oblivious, mavrogiannakis2025obliviator, 
+reichert2024menhir} to graph queries is possible, but a naive decomposition 
+into binary joins leaks intermediate output sizes --- themselves sensitive 
+signals about the graph structure being queried.
+
+
+The closest prior works on fully oblivious multi-way joins operate at the
+purely relational level. Wei and Kerschbaum~\cite{ruidi2025oblivious} (WK) 
+compute oblivious multi-way joins while hiding intermediate result sizes, 
+providing strong privacy guarantees for acyclic join queries. Hu and 
+Wu~\cite{hu2025optimal} achieve worst-case optimal oblivious joins matching the 
+AGM bound up to a logarithmic factor, without relying on ORAM or cryptographic 
+assumptions. Yet, both schemes are designed for general relational engines,
+unaware of the structural properties specific to 
+property graph workloads. This leaves substantial performance untapped.
+
+Moreover, these schemes --- along with other oblivious join-then-filter 
+approaches such as Obliviator~\cite{mavrogiannakis2025obliviator} --- treat 
+filtering as a post-processing step applied after the join materializes its 
+full output. This is both expensive, since the unfiltered join result can be 
+orders of magnitude larger than the filtered one, and privacy-weakening, since 
+the size of the unfiltered intermediate is revealed to the adversary.
+
+\emph{Our insight.} Property graph databases exhibit two structural properties 
+that we exploit. First, edges are stored in 
+both \emph{forward} and \emph{reverse} directions, sorted by source and 
+destination node ids respectively, a convention common in production graph 
+systems~\cite{janusgraph, feng2023kuzu, deutsch2019tigergraph, 
+sun2015sqlgraph}. A one-hop traversal $n_i \rightarrow e \rightarrow n_j$ can 
+therefore be evaluated from \emph{both ends simultaneously} and the partial 
+results merged, enabling parallelism. Second, graph 
+databases support stored-procedure-like query 
+templates~\cite{deutsch2019tigergraph, neo4j, janusgraph, bebee2018amazon}: 
+the schema of nodes and edges involved in a query is fixed ahead of time, with 
+only predicate values supplied at query time. This enables an offline 
+preprocessing phase to prepare node and edge tables, so that online 
+execution issues fewer oblivious operations.
+Additionally, graph queries are predicate-driven, selecting nodes 
+and edges that satisfy specific property constraints. Hence, filtering should 
+be an integral part of every processing step, and not a separate phase. 
+
+
+These observations motivate a new primitive: an efficient \emph{one-hop 
+operator} that processes $n_i \rightarrow e \rightarrow n_j$ traversals 
+obliviously, exploiting bidirectional edge layout and the offline/online 
+processing. Most multi-hop queries decompose into a set of one-hop 
+subqueries, which are \emph{independent} and can execute in parallel. The 
+residual join across decomposed parts is handled by the WK~\cite{ruidi2025oblivious} multi-way join, 
+which preserves its privacy guarantees on intermediate sizes throughout.
+We 
+build on WK rather than Hu and Wu's scheme~\cite{hu2025optimal} because WK provides a practical 
+implementation amenable to systems integration, whereas \cite{hu2025optimal}'s 
+contribution is primarily theoretical, whose 
+constant factors and cache assumptions have not yet been validated in a 
+practical system.
+
+\emph{Contributions.} We present \system, an oblivious property graph database 
+built around three contributions:
+
+\begin{itemize}
+    \item \textbf{One-hop oblivious operator.} A new operator that exploits 
+    bidirectional edge storage and offline/online decomposition to process 
+    single-hop traversals significantly more efficiently than a general 
+    oblivious join.
+
+    \item \textbf{In-place oblivious filtering.} A mechanism that fuses 
+    predicate filtering directly into the join computation, avoiding 
+    materializing the unfiltered intermediate result. Unlike existing 
+    join-then-filter schemes~\cite{ruidi2025oblivious, 
+    mavrogiannakis2025obliviator}, \system never reveals any size except the 
+    final filtered output, improving both performance and privacy.
+    
+    \item \textbf{Query decomposition framework.} A rewrite strategy that 
+    decomposes multi-hop graph queries to maximize parallelism across one-hop 
+    operators, using WK as a black-box combiner for the residual join, while 
+    preserving identical privacy guarantees throughout.
+
+    \item \textbf{Empirical evaluation.} An evaluation on a synthetic banking 
+    transaction dataset demonstrating significant end-to-end speedups over 
+    non-decomposed oblivious execution for representative 4-hop chain and 
+    branch query patterns.
+\end{itemize}
+
+Together, these contributions demonstrate that treating property graph 
+databases as first-class citizens --- rather than as relational engines 
+operating on graph-shaped data --- yields meaningful performance gains in the 
+oblivious setting without weakening the underlying security guarantees.

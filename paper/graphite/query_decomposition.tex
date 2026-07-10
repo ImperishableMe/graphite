@@ -1,0 +1,513 @@
+%==============================================================================
+\section{Query Decomposition}
+\label{sec:decomposition}
+%==============================================================================
+
+The \onehop operator of \Cref{sec:onehop} evaluates a single edge pattern
+$n_i \rightarrow e \rightarrow n_j$ obliviously, producing a hop relation
+$h_e$
+of publicly known size $|E_e|$ in a single oblivious sort. A $k$-edge
+graph query chains $k$ such patterns together. Rather than treating the
+full query as a monolithic join, we observe that it has two properties a
+we can exploit.
+
+\emph{Repeated structure.} Every edge in the query is a node-edge-node
+traversal --- the exact pattern \onehop is optimized for. Evaluating the full
+query as a single join discards this structure entirely, treating edge and
+node tables as interchangeable relations.
+
+\emph{Independent structure.} The hop over the first edge does not depend
+on the result of the hop over the last edge. Hops at different parts of the
+query can be evaluated simultaneously, with results combined only at the
+end.
+
+These two observations motivate \emph{query decomposition}: map every edge
+in the pattern to a \onehop evaluation, run independent hops in parallel,
+and combine the resulting hop-relations into a final answer. The
+combination step requires joining $k$ hop-relations on their shared node
+ids, where each of $k$ relations have publicly known
+sizes. This is precisely what \wei is designed for: it evaluates acyclic
+joins obliviously while hiding all intermediate result sizes. The 
+query decomposer's goal is to
+utilize \onehop wherever possible to efficiently handle the graph traversal
+structure and \wei for the residual combination.
+
+We illustrate each step of the decomposition on a running example: a
+graph query over a social graph in which person $p_1$ knows
+person $p_2$; $p_2$ created comment $c$ that carries tag $t$; and $p_2$
+lives in city $\mathit{ci}$, with predicates pinning $p_1$, $t$, and
+$\mathit{ci}$:
+\begin{center}
+\small\ttfamily
+p1 -[knows]-> p2 -[created]-> c -[hasTag]-> t \\
+\phantom{p1 -[knows]-> }p2 -[livesIn]-> ci \\
+\upshape predicates:\ttfamily\ p1.id=933,\ t.id=7,\ ci.id=42
+\end{center}
+A \emph{query template} defines a node-edge traversal 
+pattern and which properties 
+are filtered but leaves the predicate values unspecified. A \textit{query},
+issued at runtime, instantiates a template with concrete 
+predicate values. In the running example, the query template has five 
+node labels and four edge labels. We trace the decomposition through 
+this example at each step below.
+
+%------------------------------------------------------------------------------
+\subsection{Query Templates and Hops}
+\label{sec:decomposition:model}
+%------------------------------------------------------------------------------
+
+We model a graph query template as a directed \emph{pattern graph} $G_Q = (N,
+\mathcal{E})$. Each node $n \in N$ has a label drawn from the schema 
+(Section~\ref{sec:background:graph}), and each directed edge 
+$e \in \mathcal{E}$ is identified by the triple $(S_e, E_e, D_e)$ --- 
+the label of its source node, the edge label, and the label of its 
+destination node. A query
+also carries a set $P$ of predicates on node or edge properties.
+
+A \emph{hop} $h_e$ is the \onehop evaluation of edge $e$ over its triple
+$(S_e, E_e, D_e)$. It has exactly $|E_e|$ rows and carries the edge
+attributes of $E_e$ together with the source- and destination-node
+attributes, disambiguated by role: in $h_e$, a column is written as
+$\mathit{label}\_\texttt{src}\_\mathit{col}$ or
+$\mathit{label}\_\texttt{dst}\_\mathit{col}$. This naming lets two hops
+that meet at a shared pattern node be joined unambiguously, where the shared node
+appears as the destination of one hop and the source of the next, and the
+column names make the equality explicit.
+
+\noindent\textbf{Running example.} Each of the four edges becomes one hop:
+\begin{center}
+\small
+\begin{tabular}{@{}ll@{}}
+$h_1$: & \texttt{(p1:Person)-[knows]->(p2:Person)} \\
+$h_2$: & \texttt{(p2:Person)-[created]->(c:Comment)} \\
+$h_3$: & \texttt{(p2:Person)-[livesIn]->(ci:City)} \\
+$h_4$: & \texttt{(c:Comment)-[hasTag]->(t:Tag)} \\
+\end{tabular}
+\end{center}
+Note that $h_1$, $h_2$, and $h_3$
+are independent of one another --- none consumes another's output --- and
+can be evaluated in parallel. Each \onehop reads
+only the base node or edge tables and not the output of any other hop.
+
+%------------------------------------------------------------------------------
+\subsection{The Decomposition Algorithm}
+\label{sec:decomposition:algorithm}
+%------------------------------------------------------------------------------
+
+\Cref{alg:decompose} formalizes the procedure in three steps:
+(\emph{i})~identify entry nodes and emit one hop per edge via BFS;
+(\emph{ii})~stitch hops together on shared nodes; and
+(\emph{iii})~place predicates on the appropriate hops. We describe each
+step in turn.
+
+\begin{algorithm*}[t]
+\caption{Pattern Decomposition}
+\label{alg:decompose}
+\begin{algorithmic}[1]
+\Require query graph $G_Q=(N,\mathcal{E})$ with label-typed nodes and
+         directed edges $e=(\mathit{src}(e)\!\rightarrow\!\mathit{dst}(e))$
+         typed $(S_e,E_e,D_e)$; node predicates $P$
+\Ensure  Hop list $\mathcal{H}$ and reduced query $Q'$
+\Statex
+\State $\mathit{Roots} \gets \{\, n \in N : n=\mathit{src}(e)\text{ for
+       some }e \text{ and } n\neq\mathit{dst}(e)\ \text{for all } e \,\}$
+\State $\mathcal{H} \gets [\,]$;\quad $\mathit{seen} \gets \emptyset$
+\For{each $r \in \mathit{Roots}$ in fixed order}
+  \State $F \gets [\,r\,]$
+  \While{$F \neq [\,]$}
+    \State $u \gets \textsc{Pop}(F)$
+    \For{each out-edge $e=(u\!\rightarrow\!w)$ with $e \notin
+         \mathit{seen}$, in fixed order}
+      \State $\mathit{seen} \gets \mathit{seen}\cup\{e\}$
+      \State append hop $h_e=\langle S_e, E_e, D_e\rangle$ to $\mathcal{H}$
+      \State $\textsc{Push}(F, w)$
+    \EndFor
+  \EndWhile
+\EndFor
+\Statex
+\State $\mathcal{J} \gets \emptyset$
+\For{each pattern node $n$ appearing in $\geq 2$ hops}
+  \State let $h_{1},\dots,h_{m}$ be those hops in hop order, and
+         $\rho_j\in\{\texttt{src},\texttt{dst}\}$ the role of $n$ in $h_j$
+  \For{$j=1$ to $m-1$}
+    \State $\mathcal{J} \gets \mathcal{J} \cup
+           \{\, h_j.(\rho_j\text{-}\mathit{id}) =
+           h_{j+1}.(\rho_{j+1}\text{-}\mathit{id}) \,\}$
+  \EndFor
+\EndFor
+\Statex
+\For{each predicate $p \in P$ on node $n$}
+  \State $h \gets$ first hop in $\mathcal{H}$ with
+         $n\in\{\mathit{src}(h),\mathit{dst}(h)\}$
+  \State rewrite $p$'s column to $\mathit{label}\_\rho\_\mathit{col}$
+         for $n$'s role $\rho$ in $h$
+\EndFor
+\State $Q' \gets$ join over $\{h\in\mathcal{H}\}$ with conditions
+       $\mathcal{J}$ and the placed predicates
+\State \Return $\mathcal{H},\ Q'$
+\end{algorithmic}
+\end{algorithm*}
+
+\emph{Step 1: Entry nodes and hop emission.}
+The traversal starts from \emph{entry nodes}: nodes in the query that are 
+the source of some edge but the destination of none. A template may
+have several entry nodes when it contains branches or disconnected
+components; each seeds an independent BFS traversal. From each entry node,
+BFS emits one hop per edge in a fixed order, visiting every out-edge of
+each dequeued node. The decomposition is exhaustive: every edge becomes a
+hop. Emitting hops uniformly keeps the rewrite a function of query
+structure alone with no data-dependent choices, and hence no new leakage.
+
+\noindent\textbf{Running example.} Node $p_1$ is the only entry node. BFS
+visits $p_2$ next, which has two outgoing edges (\texttt{created} and
+\texttt{livesIn}), emitting $h_2$ and $h_3$ in fixed order. From $c$, BFS
+emits $h_4$. The four hops are produced in order $h_1, h_2, h_3, h_4$.
+
+\emph{Step 2: Stitching hops.}
+A shared node in the pattern graph --- one appearing in more than one hop --- must be
+joined on its identity in the residual query. For each such node we collect
+the hops in which it appears, note the role it plays in each (source or
+destination), and add an id-equality between consecutive occurrences. Along
+a chain the shared node is the destination of the earlier hop and the
+source of the later, giving a $\mathit{dst}\text{-}\mathit{id} =
+\mathit{src}\text{-}\mathit{id}$ condition. At a branch where the shared node is
+the source of multiple hops, we get $\mathit{src}\text{-}\mathit{id} =
+\mathit{src}\text{-}\mathit{id}$ conditions. Together these reconstruct
+exactly the equalities of the original join.
+
+\noindent\textbf{Running example.} Node $p_2$ is a branch: destination of
+$h_1$, source of both $h_2$ and $h_3$. Node $c$ is shared between $h_2$
+(destination) and $h_4$ (source). Stitching yields three join conditions:
+\begin{center}
+\small
+\begin{tabular}{@{}ll@{}}
+\texttt{h1.Person\_dst\_id = h2.Person\_src\_id} & (chain: $p_2$ in
+$h_1{\to}h_2$)\\
+\texttt{h2.Person\_src\_id = h3.Person\_src\_id} & (branch: $p_2$ in
+$h_2, h_3$)\\
+\texttt{h2.Comment\_dst\_id = h4.Comment\_src\_id} & (chain: $c$ in
+$h_2{\to}h_4$)\\
+\end{tabular}
+\end{center}
+
+\paragraph{Step 3: Placing predicates.}
+Each node predicate is attached to the first hop containing its node and
+rewritten against that hop's columns, qualified by the role the node plays
+there. We evaluate predicates in \onehop whenever possible, which marks 
+each row with a boolean indicating if it satisfied the predicates or not. However, as stated in \cref{sec:onehop}, the size of a \onehop operation
+is always bound by its edge list size. 
+
+\noindent\textbf{Running example.} Predicate $p_1.\mathit{id}=933$ lands
+on $h_1$ (where $p_1$ is the source); $t.\mathit{id}=7$ lands on $h_4$
+(where $t$ is the destination); $\mathit{ci}.\mathit{id}=42$ lands on
+$h_3$ (where $\mathit{ci}$ is the destination). The complete residual
+query handed to \wei is:
+\begin{center}
+\small
+\begin{tabular}{@{}ll@{}}
+$h_1 \bowtie h_2 \bowtie h_3 \bowtie h_4$ & \\[4pt]
+\texttt{h1.Person\_dst\_id = h2.Person\_src\_id} & (chain: $p_2$ in $h_1{\to}h_2$)\\
+\texttt{h2.Person\_src\_id = h3.Person\_src\_id} & (branch: $p_2$ in $h_2, h_3$)\\
+\texttt{h2.Comment\_dst\_id = h4.Comment\_src\_id} & (chain: $c$ in $h_2{\to}h_4$)\\[4pt]
+\texttt{h1.Person\_src\_id = 933} & (predicate on $p_1$)\\
+\texttt{h4.Tag\_dst\_id = 7} & (predicate on $t$)\\
+\texttt{h3.City\_dst\_id = 42} & (predicate on $\mathit{ci}$)\\
+\end{tabular}
+\end{center}
+The residual
+join over public-sized hop relations then evaluates them obliviously.
+A nine-way join over five node labels and four edge labels becomes a
+four-way join over four hop relations, each of publicly known size.
+
+%------------------------------------------------------------------------------
+\subsection{Parallelism and Comparison with Naive Execution}
+\label{sec:decomposition:parallelism}
+%------------------------------------------------------------------------------
+
+To see the concrete benefit of query decomposition, consider a $k$-hop chain query evaluated two
+ways. Applying \wei directly to the full $(2k{+}1)$-way join requires six
+oblivious sorts per parent-child pair over a join tree of depth $2k$,
+totaling $12k$ sorts. Moreover, each 
+parent-child pair can only be evaluated in sequence in their scheme.
+With decomposition, $k$ \onehop executions run in
+parallel (one sort each), followed by \wei over the $k$-way residual join
+(six sorts per pair over a tree of depth $k{-}1$, totaling $6(k{-}1)$
+sequential sorts). The total is $k + 6(k{-}1) = 7k - 6$ sorts --- a reduction from
+$12k$ to $7k{-}6$, with the $k$ \onehop sorts running in parallel rather
+than sequentially. For $k=3$ this cuts sequential sort depth from 24 to 12,
+and the parallel \onehop sorts contributes little to the critical path. The
+gap widens with $k$. This enables our algorithm to handle input tables of XX M, whereas the baseline saturates at size YY.\sujaya{@Bish: please confirm these comparisons}
+
+%------------------------------------------------------------------------------
+\subsection{Correctness and Data Independence}
+\label{sec:decomposition:correctness}
+%------------------------------------------------------------------------------
+
+\paragraph{Correctness.}
+Each hop $h_e$ equals the three-way join $S_e \bowtie E_e \bowtie D_e$
+(\Cref{sec:onehop}). The stitch conditions reintroduce precisely the
+foreign-key equalities of the original pattern, and predicates are
+reattached unchanged. The reduced query $Q'$ therefore computes the same
+relation as the original $(2k{+}1)$-way join.
+
+\paragraph{Data independence.}
+Every choice the procedure makes --- entry nodes, traversal order, hop
+emission, stitch conditions, and predicate placement --- is a function of
+the query graph and predicate columns alone, both public under our threat
+model (\Cref{sec:background:threat}). No data value is read. Each hop has
+public size $|E_e|$, and feeding public-sized hops to \wei keeps every
+intermediate size public. The composition leaks nothing beyond what the
+inputs already reveal.
+
+%------------------------------------------------------------------------------
+\subsection{Homogeneous Graphs}
+\label{sec:decomposition:homogeneous}
+%------------------------------------------------------------------------------
+
+When all edges share one triple --- as in the banking workload of
+\Cref{sec:evaluation}, where every edge is typed
+$(\texttt{Account})\text{-}[\texttt{Txn}]\text{-}(\texttt{Account})$ ---
+all hops are instances of a single hop relation, and the residual query
+degenerates to a self-join of that relation under the stitch and predicate
+conditions. This homogeneous case requires no algorithmic change and can
+benefit from computing the \onehop operator only once.
+
+
+% \section{Query Decomposition}
+% \label{sec:decomposition}
+% %==============================================================================
+
+% The \onehop operator of \Cref{sec:onehop} evaluates a single edge pattern
+% $n_i \rightarrow e \rightarrow n_j$. A general graph query, however, connects
+% $k$ edges into an acyclic join graph and therefore corresponds to a
+% $(2k{+}1)$-way join over $k{+}1$ node labels and $k$ edge labels. Handing such a
+% query in full to the oblivious multi-way join \wei (\Cref{sec:background:joins})
+% discards exactly the structure \onehop was built to exploit: every edge in the
+% pattern is itself a one-hop join whose result has the publicly known size $|E|$.
+
+% \system therefore \emph{decomposes} the pattern. Each edge is evaluated by a
+% \onehop into a \emph{hop relation} of public size; the residual query then joins
+% these hop relations rather than the original node and edge labels. Because each
+% hop relation already carries its endpoints' attributes, the residual join is
+% narrower: one input per edge instead of $2k{+}1$ base labels. Crucially, the rewrite
+% is a \emph{structural} transformation: it reads only the query --- labels, the
+% edge connectivity, and the columns named by predicates --- and never inspects a
+% single data value, so it introduces no new leakage.
+
+% While \wei evaluates any acyclic join graph, the decomposition is more
+% specialized. It assumes the node--edge--node shape of a graph traversal: each hop joins a source
+% node, an edge, and a destination node, and the edge relation in the middle
+% carries the foreign keys to both endpoints --- exactly the relation \onehop
+% enriches from either side. A join with no such middle relation, such as a direct
+% node-to-node join, has nothing to fill and falls outside the decomposition. In
+% the graph setting this costs nothing: traversals are mediated by edges, so two
+% nodes meet only through an edge table, never directly. Every graph pattern
+% therefore already has the shape the decomposition assumes, and \wei remains the
+% general engine behind it.
+
+% %------------------------------------------------------------------------------
+% \subsection{query graphs and Hops}
+% \label{sec:decomposition:model}
+% %------------------------------------------------------------------------------
+
+% We model a pattern query as a directed \emph{query graph} $G_Q = (N,
+% \mathcal{E})$. Each node $n \in N$ carries a label drawn from the schema, and
+% each edge $e \in \mathcal{E}$ is directed from a source node $\mathit{src}(e)$ to
+% a destination node $\mathit{dst}(e)$. An edge is \emph{typed} by the triple
+% $(S_e, E_e, D_e)$ --- its source label, edge label, and destination label. A
+% query also carries a set $P$ of predicates on node properties.
+
+% A \emph{hop} $h$ is the \onehop evaluation of one edge $e$ over its triple
+% $(S_e, E_e, D_e)$. Following \Cref{sec:onehop}, $h$ has exactly $|E_e|$ rows and
+% schema consisting of the edge attributes of $E_e$ together with the source- and
+% destination-node attributes, the latter disambiguated by the role in which the
+% node appears. We write a hop column as $\mathit{label}\_\texttt{src}\_\mathit{col}$
+% or $\mathit{label}\_\texttt{dst}\_\mathit{col}$, recording the node label, the
+% role (source or destination), and the original property name. This naming is what
+% lets two hops that meet at a shared pattern node be joined unambiguously: the same
+% node is reached as the destination of one hop and the source of the next.
+
+% Two facts about a hop are central to the rest of the section. First, a hop's size
+% $|E_e|$ is public, so a hop relation can be fed to \wei without revealing any
+% selectivity. Second, a hop is type-specific: hops for differently typed edges are
+% distinct relations, while hops for identically typed edges share one relation.
+
+% %------------------------------------------------------------------------------
+% \subsection{The Decomposition Algorithm}
+% \label{sec:decomposition:algorithm}
+% %------------------------------------------------------------------------------
+
+% \Cref{alg:decompose} states the procedure. It traverses the query graph,
+% emits one hop per edge, reconnects the hops on their shared nodes, attaches the
+% predicates, and returns a reduced query $Q'$ for \wei.
+
+% \begin{algorithm*}[t]
+% \caption{Pattern Decomposition}
+% \label{alg:decompose}
+% \begin{algorithmic}[1]
+% \Require query graph $G_Q=(N,\mathcal{E})$ with label-typed nodes and directed
+%          edges $e=(\mathit{src}(e)\!\rightarrow\!\mathit{dst}(e))$ typed
+%          $(S_e,E_e,D_e)$; node predicates $P$
+% \Ensure  Hop list $\mathcal{H}$ and reduced query $Q'$
+% \Statex
+% \State $\mathit{Roots} \gets \{\, n \in N : n=\mathit{src}(e)\text{ for some }e
+%        \text{ and } n\neq\mathit{dst}(e)\ \text{for all } e \,\}$
+% \State $\mathcal{H} \gets [\,]$;\quad $\mathit{seen} \gets \emptyset$
+% \For{each $r \in \mathit{Roots}$ in fixed order} \Comment{BFS: one hop per edge}
+%   \State $F \gets [\,r\,]$ \Comment{frontier queue}
+%   \While{$F \neq [\,]$}
+%     \State $u \gets \textsc{Pop}(F)$
+%     \For{each out-edge $e=(u\!\rightarrow\!w)$ with $e \notin \mathit{seen}$, in fixed order}
+%       \State $\mathit{seen} \gets \mathit{seen}\cup\{e\}$
+%       \State append hop $h_e=\langle S_e, E_e, D_e\rangle$ to $\mathcal{H}$
+%       \State $\textsc{Push}(F, w)$
+%     \EndFor
+%   \EndWhile
+% \EndFor
+% \Statex
+% \State $\mathcal{J} \gets \emptyset$ \Comment{stitch: shared node $\Rightarrow$ id-equality}
+% \For{each pattern node $n$ appearing in $\geq 2$ hops}
+%   \State let $h_{1},\dots,h_{m}$ be those hops in hop order, and
+%          $\rho_j\in\{\texttt{src},\texttt{dst}\}$ the role of $n$ in $h_{j}$
+%   \For{$j=1$ to $m-1$}
+%     \State $\mathcal{J} \gets \mathcal{J} \cup
+%            \{\, h_{j}.(\rho_j\text{-}\mathit{id}) = h_{j+1}.(\rho_{j+1}\text{-}\mathit{id}) \,\}$
+%   \EndFor
+% \EndFor
+% \Statex
+% \For{each predicate $p \in P$ on a node $n$} \Comment{place on first hop holding $n$}
+%   \State $h \gets$ first hop in $\mathcal{H}$ with $n\in\{\mathit{src},\mathit{dst}\}$
+%   \State rewrite $p$'s column to $\mathit{label}\_\rho\_\mathit{col}$ for $n$'s role $\rho$ in $h$
+% \EndFor
+% \State $Q' \gets$ join over $\{h\in\mathcal{H}\}$ with conditions $\mathcal{J}$ and the placed predicates
+% \State \Return $\mathcal{H},\ Q'$
+% \end{algorithmic}
+% \end{algorithm*}
+
+% \paragraph{Entry nodes.}
+% The traversal starts from the pattern's \emph{entry nodes}: those that are the
+% source of some edge but the destination of none. These are the heads of the
+% pattern, fixed entirely by its connectivity. A pattern may have several entry
+% nodes (disconnected components or several in-bound-free starts); each seeds an
+% independent traversal.
+
+% \paragraph{One hop per edge.}
+% From each entry node we perform a breadth-first traversal that emits one hop for
+% every edge, in a fixed order. The decomposition is therefore \emph{exhaustive}:
+% every edge of the pattern becomes a hop, with no cost-based selection among
+% edges. This is deliberate. Each hop replaces a three-way slice of the join by a
+% single $|E|$-sized relation, and emitting them uniformly keeps the rewrite --- and
+% hence the access pattern of producing it --- a function of the query alone.
+
+% \paragraph{Branches.}
+% A node with more than one outgoing edge yields more than one hop sharing that
+% node as their source; the traversal handles such branches with no special case,
+% since it simply visits every out-edge of each dequeued node. Chains are the
+% special case in which every node has at most one outgoing edge.
+
+% \paragraph{Stitching hops.}
+% Wherever two hops meet at the same pattern node, the reduced query must join them
+% on that node's identity. We collect, for each node shared by several hops, the
+% hops in which it appears together with its role in each, and chain consecutive
+% occurrences by an id-equality. Along a path the shared node is the destination of
+% the earlier hop and the source of the later one, giving a
+% $\mathit{dst}\text{-}\mathit{id} = \mathit{src}\text{-}\mathit{id}$ condition; at a
+% branch the node is the source of both hops, giving a
+% $\mathit{src}\text{-}\mathit{id} = \mathit{src}\text{-}\mathit{id}$ condition.
+% Together these reconstruct exactly the equalities of the original join.
+
+% \paragraph{Placing predicates.}
+% Each node predicate is attached to the first hop that contains its node and
+% rewritten against that hop's columns, qualified by the role (source or
+% destination) the node plays there. Predicates become selection conditions of the
+% reduced query, evaluated by \wei rather than inside the operator: as noted in
+% \Cref{sec:onehop}, keeping predicates out of the per-hop \onehop preserves its
+% $|E|$-sized, selectivity-independent output, so no intermediate size depends on
+% how many rows match.
+
+% %------------------------------------------------------------------------------
+% \subsection{Example}
+% \label{sec:decomposition:example}
+% %------------------------------------------------------------------------------
+
+% Consider a heterogeneous pattern over a social graph: a person $p_1$ who knows
+% $p_2$; $p_2$ authored a comment $c$ that carries tag $t$; and $p_2$ lives in city
+% $\mathit{ci}$, with predicates pinning $p_1$, $t$, and $\mathit{ci}$:
+% \begin{center}
+% \small\ttfamily
+% p1 -[knows]-> p2 -[created]-> c -[hasTag]-> t \\
+% \phantom{p1 -[knows]-> }p2 -[livesIn]-> ci \\
+% \upshape predicates:\ttfamily\ p1.id=933,\ t.id=7,\ ci.id=42
+% \end{center}
+
+% The only entry node is $p_1$ (every other node is some edge's destination). The
+% breadth-first traversal emits four hops, each with a \emph{different} triple:
+% \begin{center}
+% \small
+% \begin{tabular}{@{}l@{}}
+% $h_1$: \texttt{(Person)-[knows]->(Person)}\\
+% $h_2$: \texttt{(Person)-[created]->(Comment)}\\
+% $h_3$: \texttt{(Person)-[livesIn]->(City)}\\
+% $h_4$: \texttt{(Comment)-[hasTag]->(Tag)}\\
+% \end{tabular}
+% \end{center}
+% Node $p_2$ is a branch: it is the destination of $h_1$ and the source of both
+% $h_2$ and $h_3$. Stitching on the shared nodes ($p_2$ and $c$) and placing the
+% three predicates on the first hop holding each node yields the reduced query:
+% \begin{center}
+% \small
+% \begin{tabular}{@{}l@{}}
+% \texttt{h1.Person\_dst\_id = h2.Person\_src\_id} \quad\textrm{(stitch $p_2$)}\\
+% \texttt{h2.Person\_src\_id = h3.Person\_src\_id} \quad\textrm{(branch $p_2$)}\\
+% \texttt{h2.Comment\_dst\_id = h4.Comment\_src\_id} \quad\textrm{(stitch $c$)}\\
+% \texttt{h1.Person\_src\_id = 933}\\
+% \texttt{h3.City\_dst\_id = 42}\\
+% \texttt{h4.Tag\_dst\_id = 7}\\
+% \end{tabular}
+% \end{center}
+% A nine-way join over five node labels and four edge labels becomes a four-way
+% join over four typed hop relations, each of public size, which \wei evaluates.
+
+% %------------------------------------------------------------------------------
+% \subsection{Correctness and Data Independence}
+% \label{sec:decomposition:correctness}
+% %------------------------------------------------------------------------------
+
+% \paragraph{Correctness.}
+% Each hop equals the three-way join $S_e \bowtie E_e \bowtie D_e$ of its edge
+% (\Cref{sec:onehop}). The stitch conditions reintroduce precisely the
+% foreign-key equalities of the original pattern --- a shared pattern node induces
+% the same id-equality whether expressed over base labels or over the hops that
+% meet at it --- and the predicates are reattached unchanged. Hence the reduced
+% query $Q'$ computes the same relation as the original $(2k{+}1)$-way join.
+
+% \paragraph{Data independence.}
+% Every choice the procedure makes --- the entry nodes, the traversal order, which
+% edges become hops, the stitch conditions, and where predicates land --- is a
+% function of the query graph and the predicate columns, all of which are public
+% under our threat model (\Cref{sec:background:threat}). No data value is read.
+% The decomposition is thus fixed once the query is fixed, and each hop it produces
+% has the public size $|E_e|$; feeding hops of public size to \wei keeps every
+% intermediate size public, so the composition leaks nothing beyond the inputs.
+% %------------------------------------------------------------------------------
+% \subsection{Homogeneous Graphs}
+% \label{sec:decomposition:homogeneous}
+% %------------------------------------------------------------------------------
+
+% When a query ranges over a single node label and a single edge label --- as in
+% the banking workload of \Cref{sec:evaluation}, where every edge is typed
+% $(\texttt{Account})\text{-}[\texttt{Txn}]\text{-}(\texttt{Account})$ --- all hops
+% share one triple and are therefore instances of a \emph{single} hop relation.
+% The reduced query then degenerates to a self-join of that relation under the
+% stitch and predicate conditions of \Cref{alg:decompose}. This homogeneous case
+% requires no change to the algorithm; it is simply the point at which the typed
+% hop relations of the general procedure coincide, and it is the configuration we
+% evaluate in \Cref{sec:evaluation}.
+
+% \paragraph{Parallelism.}
+% The hops are independent of one another. Each is produced by a separate \onehop
+% that reads only its own edge's tables and writes only its own $|E_e|$-sized
+% relation; no hop consumes another's result. All hops of a query can therefore be
+% computed in parallel, leaving only the residual join over them to run
+% sequentially through \wei. Since the number of hops and their sizes are fixed by
+% the query, this parallelism is itself data-independent and adds no leakage.

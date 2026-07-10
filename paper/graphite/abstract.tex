@@ -1,0 +1,25 @@
+\begin{abstract}
+We present \system, an oblivious property graph database that closes a 
+critical gap left by Trusted Execution Environments (TEEs): while TEEs 
+protect data values through hardware isolation, they leave memory access 
+patterns exposed, allowing adversaries to infer graph structure, node 
+degrees, and query predicates without decrypting any data. Oblivious computation addresses this by 
+ensuring memory access patterns are provably independent of the input, but 
+existing techniques are either too costly (ORAM's logarithmic per-access 
+overhead) or are designed for relational structure, making them ill-suited to property graph workloads.
+
+\system exploits two properties largely unused by prior work: the 
+bidirectional (forward and reverse) storage of edges common in production 
+graph systems, and the template-driven, schema-fixed nature of graph 
+queries, which enables offline preprocessing to reduce online oblivious 
+work. Building on these observations, we introduce (1) a one-hop oblivious 
+operator that evaluates traversals from both edge directions in parallel, 
+(2) an in-place oblivious filtering mechanism that fuses predicates into the 
+join itself, revealing only the final output size, and (3) a query 
+decomposition framework that parallelizes multi-hop queries into independent 
+one-hop operators, combined via a black-box oblivious multi-way join. On a 
+XX datasets, \system achieves YY 
+end-to-end speedups over non-decomposed oblivious execution for 
+representative multi-hop chain and branch queries, while being
+oblivious.
+\end{abstract}

@@ -1,0 +1,33 @@
+\section{Security of \system}
+\label{sec:security}
+
+\begin{theorem}
+The \onehop\ operator in Algorithm~\ref{alg:onehop} is oblivious.
+\end{theorem}
+
+\begin{proof}
+Control-flow obliviousness of the \onehop\ operator is immediate from Algorithm~\ref{alg:onehop}, as the entire algorithm has no input-dependent branching statements. 
+So, all that is left is to prove the obliviousness of the memory-access pattern of \onehop. 
+
+To this end, we provide a simulator $\mathcal{S}_{\onehop}$, that takes as input the acceptable leakage
+$\mathcal{L}$ and produces as output a trace of memory accesses induced $\mathcal{S_{\onehop}}(\mathcal{L})$, which is indistinguishable from the $\mathsf{Trace}_{\mathsf{Alg}}$, the memory access pattern trace induced by a real execution of the \onehop\ algorithm.
+
+
+For \onehop\, we define $\mathcal{L} = \{ |S|, |D|, |E|, |R|\}$, where
+$|S|$ and $|D|$ are the sizes of the source and destination nodes list respectively,
+$|E|$ is the size of the edge list, and
+$|R|$ is the size of the output.
+The leakages are all public parameters corresponding to the size of each database, and the final result size.
+In the case where \onehop\ is used for an intermediate computation, then the $|R|$ can be ommitted in the leakage description $\mathcal{L}$ as it will be the same as $|E|$; as we do not leak intermediate sizes. 
+The simulation is identical in both cases modulo the final output returned by the simulator.
+
+Simulators for the basic oblivious primitives of \textsc{OCmpSet}, \textsc{OSort}
+($\mathcal{S_{\text{OSort}}}$), \textsc{OCompact}~\cite{sasy2022fast}$(\mathcal{S_{\text{OCompact}}})$, and for an oblivious hash table ($\mathcal{S}_{\text{OHT}})$~\cite{zheng2025h2o2ram} are already well-defined in prior work.
+Simulating linear passes over an array while performing any oblivious operator is also trivial, we refer to as $\mathcal{S}_{\text{LP}}$; i.e. $\mathcal{S}_{\text{LP}}$ immediately captures simulating the reduplication and deduplication steps involved in the \onehop\ algorithm.
+Our simulator for \onehop\ makes black-box use of the aforementioned simulators for fundamental primitives.
+
+The \onehop\ simulator can be constructed using these building-block simulator primitives.
+Lines 2-5 (probing the source side) and 7 (the symmetric equivalent for the destination side) is simulated by simply invoking $\mathcal{S}_{\text{LP}}$, $\mathcal{S}_{\text{OHT}}$, followed by $\mathcal{S}_{\text{LP}}$ again. Note that all the above simulators do not take any real input but simply takes as input the dimensions of S, D, and E; which are all supplied to $\mathcal{S_{\onehop}}$ via $\mathcal{L}$.
+Finally steps 8 and 12 are simulated by invoking $\mathcal{S_{\text{OSort}}}$ and $\mathcal{S_{\text{OCompact}}}$.
+$\mathcal{S_{\onehop}}$ concatenates and returns the traces produced by the above steps.
+\end{proof}
