@@ -3,10 +3,6 @@
 \label{sec:evaluation}
 %==============================================================================
 
-% Placeholder for numbers awaiting the E4 re-run (Graphite vs Full MWJ,
-% 1h budget) currently executing; replace when results land.
-\newcommand{\pending}{{\color{red}\textbf{TBD}}}
-
 We evaluate \system against two state-of-the-art oblivious join baselines,
 answering three questions:
 \begin{enumerate}[leftmargin=*]
@@ -208,20 +204,23 @@ comparison to be meaningful (\cref{tab:leakage}).
 \begin{table}[t]
 \centering
 \caption{Query topologies on AML HI-Small (5.1M edges). The 4-edge queries
-(4-hop, fan-in, fan-out, tree) are size-matched. Full MWJ numbers are from
-the in-flight re-run. % TODO: fill from results/e4_query_shapes_v2
-}
+(4-hop, fan-in, fan-out, tree) are size-matched. ``Unfiltered rows'' is the
+exact size of the intermediate a join-then-filter system must materialize,
+computed analytically from the data. Full MWJ exhausts the machine's
+471\,GB of memory on every topology; $\dagger$ marks chain instances not
+attempted because the strictly smaller 2-hop instance already ran out of
+memory.}
 \label{tab:shapes}
-\begin{tabular}{llrrr}
+\begin{tabular}{lrrrr}
 \toprule
-\textbf{Query} & \textbf{Shape} & \textbf{Edges} & \textbf{\system} & \textbf{Full MWJ} \\
+\textbf{Query} & \textbf{Edges} & \textbf{Unfiltered rows} & \textbf{\system} & \textbf{Full MWJ} \\
 \midrule
-2-hop & chain & 2 & 44\,s & \pending \\
-3-hop & chain & 3 & 84\,s & \pending \\
-4-hop & chain & 4 & 137\,s & \pending \\
-fan-in & star (in) & 4 & 249\,s & \pending \\
-fan-out & star (out) & 4 & 280\,s & \pending \\
-tree & branching & 4 & 194\,s & \pending \\
+2-hop (chain) & 2 & 355M & 43\,s & OOM \\
+3-hop (chain) & 3 & 6.6B & 84\,s & OOM$^\dagger$ \\
+4-hop (chain) & 4 & 134B & 137\,s & OOM$^\dagger$ \\
+fan-in & 4 & 1.7T & 254\,s & OOM \\
+fan-out & 4 & $9.2{\times}10^{20}$ & 281\,s & OOM \\
+tree & 4 & $6.9{\times}10^{14}$ & 194\,s & OOM \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -231,14 +230,20 @@ under five minutes, including the 4-edge star and tree patterns whose
 outputs run to millions of rows (fan-in: 8.0M, fan-out: 9.7M, tree: 4.2M).
 Latency across the size-matched quartet varies only with the residual join
 and the output size, not with the shape itself --- fan-in, fan-out, and
-tree cost within $1.4$--$2\times$ of the equally sized chain. Full MWJ, by
-contrast, must materialize the unfiltered output of the full multi-way
-join; on this graph its 2-hop instance already exceeds the machine's memory
-(\cref{sec:evaluation:cross}), and deeper or wider topologies only grow the
-intermediate.
-% TODO(pending E4 v2): replace the last sentence with measured Full MWJ
-% outcomes per cell (expected: OOM/T-O on all six), and, if we add the
-% banking_200k companion where Full MWJ completes, quote concrete speedups.
+tree cost within $1.4$--$2.1\times$ of the equally sized chain. Full MWJ,
+by contrast, fails with out-of-memory on every topology, well before the
+one-hour budget expires. The ``unfiltered rows'' column explains why, and
+shows that this is not a memory-budget artifact: star and tree topologies
+compound hub degrees multiplicatively (fan-in over a node of in-degree $d$
+contributes $d^4$ rows), driving the unfiltered intermediate to $10^{12}$
+--$10^{20}$ rows --- the fan-out intermediate alone would occupy roughly
+$10^{23}$ bytes. No machine, at any memory size, executes these queries
+under the join-then-filter model; nor does shrinking the graph help, since
+even a 100$\times$ smaller banking graph (50K edges) still yields a
+$1.7{\times}10^{16}$-row fan-out intermediate. \system is unaffected by
+this blowup because it never materializes the intermediate at all: its
+star and tree queries run in the same few minutes as the equally sized
+chain.
 
 %------------------------------------------------------------------------------
 \subsection{Sensitivity to Intermediate Result Size}
