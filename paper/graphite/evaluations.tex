@@ -3,7 +3,23 @@
 \label{sec:evaluation}
 %==============================================================================
 
-We evaluate \system on financial transaction workloads, comparing decomposed execution against baseline oblivious multi-way joins.
+% Placeholder for numbers awaiting the E4 re-run (Graphite vs Full MWJ,
+% 1h budget) currently executing; replace when results land.
+\newcommand{\pending}{{\color{red}\textbf{TBD}}}
+
+We evaluate \system against two state-of-the-art oblivious join baselines,
+answering three questions:
+\begin{enumerate}[leftmargin=*]
+    \item How does \system compare against existing oblivious join approaches
+    on multi-hop graph queries, across real and synthetic graphs of up to
+    180M edges? (\cref{sec:evaluation:cross})
+    \item Does \system generalize beyond chain queries to other join
+    topologies such as fan-in, fan-out, and tree patterns?
+    (\cref{sec:evaluation:shapes})
+    \item Is \system's cost truly independent of the size of the unfiltered
+    intermediate result, as promised by in-place filtering?
+    (\cref{sec:evaluation:density})
+\end{enumerate}
 
 %------------------------------------------------------------------------------
 \subsection{Experimental Setup}
@@ -11,172 +27,274 @@ We evaluate \system on financial transaction workloads, comparing decomposed exe
 %------------------------------------------------------------------------------
 
 \paragraph{Hardware.}
-Intel Xeon processor with TDX support, 128GB RAM, running Ubuntu 22.04.
+All experiments run inside an Intel TDX guest VM on a recent Intel Xeon host,
+with 120 vCPUs (60 physical cores, 2-way SMT), 471\,GB of RAM, and Ubuntu
+24.04 (Linux 6.8). Every system executes inside the same trusted VM and is
+configured to use 64 threads.
 
-\paragraph{Dataset.}
-Banking transaction graph with:
-\begin{itemize}
-    \item \texttt{Account} nodes: varying from 1K to 100K
-    \item \texttt{Transaction} edges: 5$\times$ the number of accounts
-    \item Properties: account balance, transaction amount, timestamps
+\paragraph{Systems compared.}
+We compare three systems, all of which run entirely inside the TEE:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{\system} (ours): the decomposed pipeline described in this
+    paper --- parallel \onehop operators (\cref{sec:onehop}) feeding a
+    residual oblivious multi-way join with in-place filtering
+    (\cref{sec:decomposition}).
+    \item \textbf{Obliviator chained}: the state-of-the-art oblivious
+    join kernel of Obliviator~\cite{mavrogiannakis2025obliviator}, applied
+    hop-by-hop: each hop is an oblivious two-table join whose output is
+    re-keyed and fed to the next hop.
+    \item \textbf{Full MWJ}: the WK oblivious multi-way
+    join~\cite{ruidi2025oblivious} executed over the full, non-decomposed
+    query, with predicate filtering applied after the join --- the
+    join-then-filter execution model of prior oblivious join work.
 \end{itemize}
-
-\paragraph{Queries.}
-\begin{itemize}
-    \item \textbf{Chain queries}: 2-hop to 5-hop linear patterns
-    \item \textbf{Branch queries}: Star patterns with central node
-    \item All queries include filter predicates on endpoint nodes
-\end{itemize}
-
-\paragraph{Baselines.}
-\begin{itemize}
-    \item \textbf{No Decomposition}: All tables processed by oblivious multi-way join
-    \item \textbf{With Decomposition}: \system's hybrid approach
-\end{itemize}
-
-%------------------------------------------------------------------------------
-\subsection{End-to-End Performance}
-\label{sec:evaluation:e2e}
-%------------------------------------------------------------------------------
-
-Table~\ref{tab:e2e} shows end-to-end query execution times.
 
 \begin{table}[t]
 \centering
-\caption{End-to-end performance comparison (10K accounts, 50K transactions)}
-\label{tab:e2e}
+\caption{Leakage profile of the compared systems: which result sizes each
+system reveals to an adversary observing memory. All systems reveal the
+(public) input table sizes.}
+\label{tab:leakage}
+\begin{tabular}{lccc}
+\toprule
+ & \textbf{Per-hop} & \textbf{Unfiltered} & \textbf{Filtered} \\
+\textbf{System} & \textbf{intermediates} & \textbf{join output} & \textbf{output} \\
+\midrule
+Obliviator chained & revealed & revealed & --- \\
+Full MWJ & hidden & revealed & --- \\
+\system & hidden & \emph{never materialized} & revealed \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The three systems provide different security guarantees, summarized in
+\cref{tab:leakage}. Obliviator's chained execution materializes every
+per-hop intermediate at its true cardinality, revealing the size of each ---
+a sensitive signal about graph structure (\eg node degrees along the queried
+path). Full MWJ hides all intermediates inside the multi-way join, but must
+materialize the \emph{unfiltered} join output before filtering, revealing
+its size. \system reveals only the final \emph{filtered} output size: the
+unfiltered intermediate is never materialized at all. \system therefore has
+the strictest leakage profile of the three; where we nevertheless include
+the leakier baselines, we are giving them the benefit of the doubt.
+
+\paragraph{Datasets.}
+\Cref{tab:datasets} lists our five graphs. \emph{Banking} is a synthetic
+financial transaction graph produced by our seeded generator (1M accounts,
+5M transactions, near-uniform degrees). The \emph{IBM AML} HI-Small, HI-Medium,
+and HI-Large graphs are anti-money-laundering transaction networks from
+IBM's AMLworld generator~\cite{altman2023realistic}; their degree
+distributions are heavy-tailed, with hub accounts that participate in a
+large fraction of transactions. \emph{SNAP cit-Patents} is the US patent
+citation network~\cite{snapnets}. Besides node and edge counts, the table
+reports the number of \emph{unfiltered 2-hop paths},
+$\sum_a \mathit{in}(a)\cdot \mathit{out}(a)$ --- the size of the intermediate
+that a join-then-filter system must process for a 2-hop query. Skew
+decouples this quantity from edge count: Banking and HI-Small have the same
+number of edges, but HI-Small has $15\times$ more 2-hop paths; HI-Medium has
+$6\times$ more edges than cit-Patents but $146\times$ more paths.
+
+\begin{table}[t]
+\centering
+\caption{Datasets. ``2-hop paths'' is the unfiltered 2-hop join size
+$\sum_a \mathit{in}(a)\cdot\mathit{out}(a)$, the intermediate a
+join-then-filter system materializes.}
+\label{tab:datasets}
 \begin{tabular}{lrrr}
 \toprule
-\textbf{Query} & \textbf{No Decomp} & \textbf{With Decomp} & \textbf{Speedup} \\
+\textbf{Dataset} & \textbf{Nodes} & \textbf{Edges} & \textbf{2-hop paths} \\
 \midrule
-4-hop chain & 11.53s & 6.94s & 1.66$\times$ \\
-branch & 23.03s & 16.97s & 1.35$\times$ \\
+Banking (synthetic) & 1.0M & 5.0M & 23.3M \\
+IBM AML HI-Small & 515K & 5.1M & 355.1M \\
+SNAP cit-Patents & 3.8M & 16.5M & 82.2M \\
+IBM AML HI-Medium & 2.1M & 31.9M & 12.0B \\
+IBM AML HI-Large & 2.1M & 179.7M & 329.8B \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\paragraph{Key Findings.}
-\begin{itemize}
-    \item \system achieves 1.35--1.66$\times$ speedup on these queries
-    \item Chain queries benefit more than branch queries from decomposition
-    \item The one-hop operator contributes only 0.17s of the 6.94s decomposed time (2.5\%), with most time in the reduced multi-way join
-\end{itemize}
+\paragraph{Queries.}
+Our workload is the anchored multi-hop traversal from
+\cref{sec:introduction}: starting from a flagged entity, follow $k$
+node--edge--node hops and return the matching paths. In SQL form, a $k$-hop
+query joins $k{+}1$ node aliases with $k$ edge aliases and carries an
+equality predicate anchoring the first node (a flagged account or bank).
+\Cref{sec:evaluation:cross,sec:evaluation:density} use the 2-hop instance of
+this template; \cref{sec:evaluation:shapes} varies the join topology
+(chains, fan-in, fan-out, tree). For \system, each query is rewritten by the
+decomposition framework of \cref{sec:decomposition}; baselines execute
+the original query.
 
-% %------------------------------------------------------------------------------
-% \subsection{Breakdown Analysis}
-% \label{sec:evaluation:breakdown}
-% %------------------------------------------------------------------------------
-
-% Figure~\ref{fig:breakdown} shows the time breakdown for a 4-hop chain query.
-
-% \begin{figure}[t]
-% \centering
-% \small
-% \begin{verbatim}
-% 4-hop chain query breakdown (10K accounts):
-
-% No Decomposition:
-%   [======= Multi-way Join: 11.53s =======]
-
-% With Decomposition:
-%   [1-hop][======= Reduced MWJ =======]
-%    0.17s          6.77s
-%               Total: 6.94s
-% \end{verbatim}
-% \caption{Time breakdown for 4-hop chain query. The \onehop operation is extremely fast (0.17s), while the main benefit comes from the reduced multi-way join operating on fewer tables.}
-% \label{fig:breakdown}
-% \end{figure}
-
-% The \onehop operation (0.17s) is nearly negligible compared to the join time. The key benefit is that the reduced multi-way join (6.77s) operates on the decomposed query structure, which is faster than the original 7-table join (11.53s).
+\paragraph{Methodology.}
+Each (system, dataset, query) cell is given a budget of one hour and the
+full machine; runs exceeding the budget are reported as timeouts (T/O) and
+runs exhausting the 471\,GB of memory as out-of-memory (OOM). Because many
+cells run for tens of minutes to hours, we report a single measured run per
+cell, preceded by a discarded warm-up run; repeated executions of the
+fastest cells vary by well under $2\%$. The output of every completing run
+is validated against a plaintext SQLite baseline, and output cardinalities
+additionally match analytically computed ground truth.
 
 %------------------------------------------------------------------------------
-\subsection{Scaling Experiments}
-\label{sec:evaluation:scaling}
+\subsection{Cross-Dataset Comparison}
+\label{sec:evaluation:cross}
 %------------------------------------------------------------------------------
-
-\paragraph{Scaling with Data Size.}
-Table~\ref{tab:scaling} shows performance as data size increases.
-
-\begin{table}[t]
-\centering
-\caption{Scaling with data size (4-hop chain query)}
-\label{tab:scaling}
-\begin{tabular}{rrrr}
-\toprule
-\textbf{Accounts} & \textbf{No Decomp} & \textbf{With Decomp} & \textbf{Speedup} \\
-\midrule
-1K & 0.68s & 0.40s & 1.67$\times$ \\
-2K & 1.39s & 0.74s & 1.86$\times$ \\
-5K & 4.09s & 3.50s & 1.16$\times$ \\
-10K & 11.53s & 6.94s & 1.66$\times$ \\
-20K & 22.01s & 14.62s & 1.50$\times$ \\
-50K & 70.00s & 36.87s & 1.89$\times$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Speedup ranges from 1.16$\times$ to 1.89$\times$ across different scales, with an average of approximately 1.6$\times$. The variation is due to cache effects and the relative cost of different phases at different scales.
-
-\paragraph{One-Hop Overhead.}
-The one-hop operator time scales linearly with data size: 0.01s at 1K accounts to 1.01s at 50K accounts, representing only 1--3\% of total decomposed execution time.
-
-Figure~\ref{fig:scaling} visualizes the scaling behavior for both query types. The decomposed approach (blue) consistently outperforms the non-decomposed baseline (red), with speedup annotations showing the improvement ratio at each scale.
 
 \begin{figure*}[t]
 \centering
-\begin{minipage}[t]{0.48\textwidth}
-    \centering
-    \includegraphics[width=\textwidth]{figures/scaling_chain4.png}
-    (a) 4-hop chain query
-\end{minipage}
-\hfill
-\begin{minipage}[t]{0.48\textwidth}
-    \centering
-    \includegraphics[width=\textwidth]{figures/scaling_branch.png}
-    (b) Branch query
-\end{minipage}
-\caption{Scaling performance: Non-decomposed (red) vs decomposed (blue) execution time as data size increases. Speedup annotations show the ratio at each scale.}
-\label{fig:scaling}
+\includegraphics[width=0.95\textwidth]{figures/e3_cross_dataset.pdf}
+\caption{Anchored 2-hop query across five datasets (log-scale latency).
+\system is the only system that completes on all five graphs. Baseline cost
+tracks the unfiltered 2-hop path count (\cref{tab:datasets}), not the edge
+count: Obliviator needs 49\,s on Banking but 20.9\,min on HI-Small, two
+graphs with the same number of edges.}
+\label{fig:cross_dataset}
 \end{figure*}
 
+We first run the anchored 2-hop query on all five datasets and all three
+systems. \Cref{fig:cross_dataset} shows the results.
 
+\paragraph{\system completes everywhere; baselines do not.}
+\system finishes on every graph: 44\,s and 45\,s on the two 5M-edge graphs,
+2.5\,min on cit-Patents, 5.2\,min on HI-Medium, and 24.1\,min on HI-Large
+(180M edges) --- to our knowledge the largest graph processed by a fully
+oblivious query system. Full MWJ completes only on Banking (9.9\,min,
+$13.5\times$ slower than \system) and cit-Patents (36.8\,min,
+$14.6\times$ slower); on all three AML graphs it exhausts 471\,GB of memory
+materializing the unfiltered intermediate. Obliviator chained completes on
+three of five graphs and exceeds the one-hour budget on HI-Medium and
+HI-Large.
 
-% %==============================================================================
-% \section{Related Work}
-% \label{sec:related}
-% %==============================================================================
+\paragraph{Baseline cost follows skew, not size.}
+The comparison between Banking and HI-Small isolates the effect of degree
+skew: both graphs have $\sim$5M edges, but HI-Small's hub accounts inflate
+the unfiltered 2-hop intermediate from 23.3M to 355.1M paths
+(\cref{tab:datasets}). \system is essentially indifferent (44\,s vs.\
+45\,s), because its cost is a function of the input size and the filtered
+output only. Obliviator degrades from 49\,s to 20.9\,min ($28\times$ slower
+than \system) because each of its hops materializes the true intermediate;
+on HI-Medium, with 12.0 \emph{billion} 2-hop paths, it does not finish
+within the budget at all. Note that Obliviator only gets as far as it does
+by \emph{revealing} every intermediate size (\cref{tab:leakage}); even with
+this leakage advantage, it is dominated by \system on every dataset.
 
-% %------------------------------------------------------------------------------
-% \subsection{Oblivious Database Systems}
-% \label{sec:related:oblivious}
-% %------------------------------------------------------------------------------
+These observations set up the remaining two experiments. Obliviator's
+chained kernel is a linear pipeline whose efficiency depends on
+revealing per-hop sizes; it supports only chain-shaped queries, and
+extending it to other topologies would require new kernels and yet more
+leakage. We therefore exclude it from the topology experiment and compare
+against the fully hiding Full MWJ (\cref{sec:evaluation:shapes}). Second,
+the correlation between baseline cost and intermediate size suggests that
+the unfiltered intermediate --- not the graph itself --- is what baselines
+pay for; \cref{sec:evaluation:density} isolates exactly this variable.
 
-% \paragraph{ORAM-Based Approaches.}
-% Oblivious RAM~\cite{oram-goldreich} provides general-purpose oblivious memory access but incurs $O(\log N)$ overhead per access. Systems like Oblix~\cite{oblix} and Opaque~\cite{opaque} use ORAM for oblivious database operations. Our work avoids ORAM overhead by designing algorithms with inherently oblivious access patterns.
+%------------------------------------------------------------------------------
+\subsection{Generality Across Query Topologies}
+\label{sec:evaluation:shapes}
+%------------------------------------------------------------------------------
 
-% \paragraph{Oblivious Relational Operators.}
-% Prior work has developed oblivious versions of relational operators: sorting~\cite{oblivious-sort}, filtering, aggregation, and joins~\cite{oblivious-join}. We build on oblivious multi-way join algorithms~\cite{TODO} but introduce graph-specific optimizations.
+Chain queries are only one traversal pattern. Investigators also ask
+\emph{fan-in} queries (find $m$ distinct transactions converging on a
+flagged account --- a smurfing pattern), \emph{fan-out} queries ($m$
+transactions leaving a flagged account --- dispersal), and \emph{tree}
+queries combining both. In \system, topology is free: the decomposition
+framework turns \emph{every} edge of the join graph into an independent
+\onehop operator, and only the residual join structure changes. We run
+2/3/4-hop chains plus a size-matched 4-edge quartet (4-hop chain, fan-in,
+fan-out, tree) on AML HI-Small, comparing \system against Full MWJ ---
+the only baseline whose security matches ours closely enough for the
+comparison to be meaningful (\cref{tab:leakage}).
 
-% %------------------------------------------------------------------------------
-% \subsection{Secure Graph Processing}
-% \label{sec:related:graph}
-% %------------------------------------------------------------------------------
+\begin{table}[t]
+\centering
+\caption{Query topologies on AML HI-Small (5.1M edges). The 4-edge queries
+(4-hop, fan-in, fan-out, tree) are size-matched. Full MWJ numbers are from
+the in-flight re-run. % TODO: fill from results/e4_query_shapes_v2
+}
+\label{tab:shapes}
+\begin{tabular}{llrrr}
+\toprule
+\textbf{Query} & \textbf{Shape} & \textbf{Edges} & \textbf{\system} & \textbf{Full MWJ} \\
+\midrule
+2-hop & chain & 2 & 44\,s & \pending \\
+3-hop & chain & 3 & 84\,s & \pending \\
+4-hop & chain & 4 & 137\,s & \pending \\
+fan-in & star (in) & 4 & 249\,s & \pending \\
+fan-out & star (out) & 4 & 280\,s & \pending \\
+tree & branching & 4 & 194\,s & \pending \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-% \paragraph{Encrypted Graph Databases.}
-% Systems like encrypted Neo4j variants protect data at rest but do not hide access patterns during query execution.
+\Cref{tab:shapes} shows the results. \system completes every topology in
+under five minutes, including the 4-edge star and tree patterns whose
+outputs run to millions of rows (fan-in: 8.0M, fan-out: 9.7M, tree: 4.2M).
+Latency across the size-matched quartet varies only with the residual join
+and the output size, not with the shape itself --- fan-in, fan-out, and
+tree cost within $1.4$--$2\times$ of the equally sized chain. Full MWJ, by
+contrast, must materialize the unfiltered output of the full multi-way
+join; on this graph its 2-hop instance already exceeds the machine's memory
+(\cref{sec:evaluation:cross}), and deeper or wider topologies only grow the
+intermediate.
+% TODO(pending E4 v2): replace the last sentence with measured Full MWJ
+% outcomes per cell (expected: OOM/T-O on all six), and, if we add the
+% banking_200k companion where Full MWJ completes, quote concrete speedups.
 
-% \paragraph{TEE-Based Graph Analytics.}
-% GraphSC~\cite{graphsc} and similar systems run graph analytics (PageRank, shortest paths) inside secure enclaves. These focus on iterative algorithms, not pattern-matching queries. Our work targets the latter.
+%------------------------------------------------------------------------------
+\subsection{Sensitivity to Intermediate Result Size}
+\label{sec:evaluation:density}
+%------------------------------------------------------------------------------
 
-% \paragraph{Oblivious Graph Algorithms.}
-% Prior work on oblivious graph algorithms focuses on specific computations (BFS, DFS, shortest paths). We address the more general problem of pattern-matching queries with predicates.
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/e5_density_5M.pdf}
+\caption{Output-size sensitivity on fixed-size inputs (1M accounts, 5M
+edges). (a) The hub-concentration knob grows the unfiltered 2-hop join from
+26M to 362M rows while the filtered output stays below 2K rows. (b) \system
+is flat across the sweep; baseline latency tracks the unfiltered
+intermediate (slope ${\approx}1$ on the log-log axes) until Full MWJ
+runs out of memory.}
+\label{fig:density}
+\end{figure*}
 
-% %------------------------------------------------------------------------------
-% \subsection{Graph Query Optimization}
-% \label{sec:related:optimization}
-% %------------------------------------------------------------------------------
+The cross-dataset experiment varied graph size and skew together. Our final
+experiment isolates the single variable that our in-place filtering design
+targets: the size of the unfiltered intermediate. We generate four Banking
+variants with \emph{identical} table sizes (1M accounts, 5M transactions)
+that differ only in how edges concentrate on a small set of hub accounts
+(hub fraction $p \in \{0, 0.1, 0.2, 0.35\}$). Raising $p$ inflates the
+unfiltered 2-hop join from 26.1M to 362.1M rows ($13.9\times$), while the
+anchored query's \emph{filtered} output stays tiny (8 to 1{,}823 rows). To
+an oblivious system whose cost depends only on public sizes, these four
+inputs should be indistinguishable.
 
-% Traditional graph query optimization focuses on join ordering, indexing, and caching---none of which consider obliviousness. Query decomposition appears in distributed graph processing but without security constraints. To our knowledge, \system is the first to combine graph-native query optimization with oblivious execution.
+\Cref{fig:density} shows that \system behaves exactly as designed: latency
+is flat at $42.7$--$43.1$\,s across the entire sweep --- a spread under
+$1\%$ --- despite the unfiltered intermediate growing by $13.9\times$. The
+baselines instead pay for an intermediate the query never asked for. Full
+MWJ scales linearly with the unfiltered size (10.5\,min at 26M rows,
+19.7\,min at 49M) and runs out of memory beyond 124M rows. Obliviator
+chained degrades from 55\,s to 19.9\,min, a $21.8\times$ slowdown,
+tracking --- and, through its runtime, revealing --- the unfiltered size.
+
+This experiment doubles as a security observation. For the baselines,
+\emph{runtime itself} is a side channel: an adversary who merely times the
+query learns the unfiltered intermediate size, which here reflects the
+density of the hub structure in the underlying graph. \system's flat
+latency leaks nothing about graph density beyond what the (public) filtered
+output size already implies. At a larger 10M-edge tier the collapse is
+complete: Full MWJ exceeds memory at 242M intermediate rows and Obliviator
+exceeds three hours, while \system remains flat at $\sim$91\,s (not
+plotted).
+
+\paragraph{Summary.}
+Across all three experiments, the pattern is the same: the cost of prior
+oblivious join approaches is governed by the size of intermediates they
+materialize --- per-hop results for Obliviator, the unfiltered join for
+Full MWJ --- and real graph workloads make those intermediates explode.
+\system's costs are governed by the input size and the filtered output
+size alone, which is why it completes every dataset, every topology, and
+every density level in this evaluation, while leaking strictly less.
 
 
 %==============================================================================
@@ -191,8 +309,7 @@ We presented \system, an oblivious property graph database that exploits graph s
 
     \item \textbf{Query Decomposition}: A framework that rewrites multi-hop queries to maximize \onehop usage, reducing the work for oblivious multi-way joins.
 
-    \item \textbf{Evaluation}: Experiments on financial transaction workloads showing 1.2--1.9$\times$ speedup over baseline oblivious execution while maintaining identical security guarantees.
+    \item \textbf{Evaluation}: Experiments on five real and synthetic graphs of up to 180M edges showing that \system is the only oblivious system to complete anchored multi-hop queries on all of them --- up to $28\times$ faster than baselines where they complete at all --- that it generalizes to fan-in, fan-out, and tree topologies, and that its latency is insensitive to the size of the unfiltered intermediate result, while revealing only the final filtered output size.
 \end{enumerate}
 
 \system demonstrates that graph-specific optimizations are compatible with oblivious execution. Future work includes extending to cyclic query patterns, developing cost-based decomposition, and supporting additional graph operations.
-
