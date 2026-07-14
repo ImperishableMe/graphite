@@ -16,11 +16,14 @@ Failed cells are drawn honestly, never as a fake latency:
   OOM     -> an x marker at the baseline labeled "OOM" (no time bound exists).
 
 Usage:
-  python3 scripts/experiments/plot_e3_cross_dataset.py [summary.csv]
+  python3 scripts/experiments/plot_e3_cross_dataset.py [summary.csv] [--exclude d1,d2]
   # default input: <project>/results/e3_cross_dataset/summary.csv
+  # --exclude drops datasets (by summary label, e.g. banking_1M) from the
+  #   figure without touching the summary data
   # output: e3_cross_dataset.png + .pdf next to the input CSV
 """
 
+import argparse
 import csv
 import json
 import sys
@@ -71,12 +74,27 @@ def fmt_seconds(sec: float) -> str:
 
 
 def main():
-    summary_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SUMMARY
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("summary", nargs="?", default=DEFAULT_SUMMARY, type=Path,
+                    help=f"summary.csv from run_e3_cross_dataset.py "
+                         f"(default: {DEFAULT_SUMMARY})")
+    ap.add_argument("--exclude", default="",
+                    help="comma-separated dataset labels to drop from the "
+                         "figure (e.g. banking_1M)")
+    args = ap.parse_args()
+
+    summary_path = args.summary
     if not summary_path.is_file():
         sys.exit(f"summary not found: {summary_path}")
 
     with open(summary_path) as f:
         cells = list(csv.DictReader(f))
+    excluded = {d for d in args.exclude.split(",") if d}
+    unknown = excluded - {c["dataset"] for c in cells}
+    if unknown:
+        sys.exit(f"--exclude names not in {summary_path}: {sorted(unknown)}")
+    cells = [c for c in cells if c["dataset"] not in excluded]
     if not cells:
         sys.exit(f"{summary_path} is empty")
 
