@@ -99,6 +99,10 @@ target_link_libraries(ibm_aml_onehop PRIVATE core)
 add_executable(snap_patents_onehop src/snap_patents_onehop.cpp)
 target_link_libraries(snap_patents_onehop PRIVATE core)
 
+# LDBC SNB one-hop executable (W2, mirror of banking_onehop with SNB person/knows schema)
+add_executable(ldbc_snb_onehop src/ldbc_snb_onehop.cpp)
+target_link_libraries(ldbc_snb_onehop PRIVATE core)
+
 # Enable testing
 enable_testing()
 

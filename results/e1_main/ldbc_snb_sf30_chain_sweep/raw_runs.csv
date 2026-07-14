@@ -1,0 +1,13 @@
+system,query,dataset,run_id,is_warmup,total_ms,onehop_ms,mwj_ms,output_rows
+nebuladb,snb_1hop,ldbc_snb_sf30,1,0,847.39,847.39,,12035314
+obliviator_chained,snb_1hop,ldbc_snb_sf30,1,0,,,,OOM
+full_mwj_no_filter,snb_1hop,ldbc_snb_sf30,1,0,230784.13,,230784.13,12035314
+nebuladb,snb_2hop,ldbc_snb_sf30,1,0,108863.33099999999,847.39,108015.94099999999,106
+obliviator_chained,snb_2hop,ldbc_snb_sf30,1,0,,,,SKIPPED
+full_mwj_no_filter,snb_2hop,ldbc_snb_sf30,1,0,,,,OOM
+nebuladb,snb_3hop,ldbc_snb_sf30,1,0,209778.073,847.39,208930.683,10317
+obliviator_chained,snb_3hop,ldbc_snb_sf30,1,0,,,,SKIPPED
+full_mwj_no_filter,snb_3hop,ldbc_snb_sf30,1,0,,,,SKIPPED
+nebuladb,snb_4hop,ldbc_snb_sf30,1,0,336375.02700000006,847.39,335527.63700000005,1825369
+obliviator_chained,snb_4hop,ldbc_snb_sf30,1,0,,,,SKIPPED
+full_mwj_no_filter,snb_4hop,ldbc_snb_sf30,1,0,,,,SKIPPED

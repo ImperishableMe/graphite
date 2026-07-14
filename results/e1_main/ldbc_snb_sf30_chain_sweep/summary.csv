@@ -1,0 +1,13 @@
+system,query,dataset,n_runs,median_ms,min_ms,max_ms,stddev_ms,output_rows
+full_mwj_no_filter,snb_1hop,ldbc_snb_sf30,1,230784.13,230784.13,230784.13,0.0,12035314
+full_mwj_no_filter,snb_2hop,ldbc_snb_sf30,0,,,,,OOM
+full_mwj_no_filter,snb_3hop,ldbc_snb_sf30,0,,,,,SKIPPED
+full_mwj_no_filter,snb_4hop,ldbc_snb_sf30,0,,,,,SKIPPED
+nebuladb,snb_1hop,ldbc_snb_sf30,1,847.39,847.39,847.39,0.0,12035314
+nebuladb,snb_2hop,ldbc_snb_sf30,1,108863.33099999999,108863.33099999999,108863.33099999999,0.0,106
+nebuladb,snb_3hop,ldbc_snb_sf30,1,209778.073,209778.073,209778.073,0.0,10317
+nebuladb,snb_4hop,ldbc_snb_sf30,1,336375.02700000006,336375.02700000006,336375.02700000006,0.0,1825369
+obliviator_chained,snb_1hop,ldbc_snb_sf30,0,,,,,OOM
+obliviator_chained,snb_2hop,ldbc_snb_sf30,0,,,,,SKIPPED
+obliviator_chained,snb_3hop,ldbc_snb_sf30,0,,,,,SKIPPED
+obliviator_chained,snb_4hop,ldbc_snb_sf30,0,,,,,SKIPPED

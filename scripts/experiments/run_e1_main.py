@@ -2,12 +2,13 @@
 """
 E1 main-result runner (chain queries only, reduced scope).
 
-Supports three workloads via --workload: `banking` (W1, default), `aml`
-(IBM AML-Data W4), and `snap` (SNAP cit-Patents W3). The workload selects the
-one-hop binary, the five chain queries, the obliviator src.txt converter, and
-the default dataset; everything else is workload-agnostic (sgx_app reads schema
-from CSV headers; the rewriter keys on the shared account/txn column names —
-W3/W4 deliberately reuse W1's account/txn/acc_from/acc_to naming).
+Supports four workloads via --workload: `banking` (W1, default), `aml`
+(IBM AML-Data W4), `snap` (SNAP cit-Patents W3), and `snb` (LDBC SNB W2).
+The workload selects the one-hop binary, the five chain queries, the
+obliviator src.txt converter, and the default dataset; everything else is
+workload-agnostic (sgx_app reads schema from CSV headers; the rewriter keys
+on the shared account/txn column names — W2/W3/W4 deliberately reuse W1's
+account/txn/acc_from/acc_to naming).
 
 Compares three systems on the five chain queries at a single dataset scale:
 
@@ -57,6 +58,7 @@ Usage:
   python3 scripts/experiments/run_e1_main.py --queries banking_1hop,banking_3hop
   python3 scripts/experiments/run_e1_main.py --workload aml   # IBM AML-Data W4
   python3 scripts/experiments/run_e1_main.py --workload snap  # SNAP cit-Patents W3
+  python3 scripts/experiments/run_e1_main.py --workload snb   # LDBC SNB W2
 """
 
 import argparse
@@ -88,6 +90,7 @@ OBL_KHOP_BIN = OBL_NFK_DIR / "obliviator_khop_chained"
 CONVERT_BANKING_1HOP = OBL_FK_DIR / "convert_banking_1hop.py"
 CONVERT_AML_1HOP = OBL_FK_DIR / "convert_aml_1hop.py"
 CONVERT_PATENTS_1HOP = OBL_FK_DIR / "convert_patents_1hop.py"
+CONVERT_SNB_1HOP = OBL_FK_DIR / "convert_snb_1hop.py"
 
 # Per-workload configuration. A workload selects the one-hop binary (NebulaDB's
 # decomposed-hop driver), its CMake build target, the chain query set, the
@@ -117,6 +120,19 @@ WORKLOADS = {
         "queries": ["snap_1hop", "snap_2hop", "snap_3hop", "snap_4hop", "snap_5hop"],
         "obl_converter": CONVERT_PATENTS_1HOP,
         "default_dataset": "snap_patents",
+    },
+    # snb defaults to 4 hops: the SNB knows graph is dense (avg degree ~73 at
+    # SF30), and the minimum 5-hop chain output over ALL possible anchors is
+    # 62.9M rows (median 1.1e11) — infeasible for every compared system. The
+    # anchor (a1.account_id = 22701) was picked by exact walk-count DP so hops
+    # 2/3/4 land at 106 / 10,317 / 1,825,369 output rows, in line with the
+    # other workloads' profiles. snb_5hop.sql exists for --queries opt-in.
+    "snb": {
+        "onehop_bin": OBLIGRAPH_BUILD / "ldbc_snb_onehop",
+        "onehop_target": "ldbc_snb_onehop",
+        "queries": ["snb_1hop", "snb_2hop", "snb_3hop", "snb_4hop"],
+        "obl_converter": CONVERT_SNB_1HOP,
+        "default_dataset": "ldbc_snb_sf30",
     },
 }
 
@@ -409,7 +425,7 @@ def main():
                    help="Workload family selecting the one-hop binary, chain "
                         "queries, obliviator converter, and default dataset "
                         "(default: banking). 'aml' = IBM AML-Data W4; "
-                        "'snap' = SNAP cit-Patents W3.")
+                        "'snap' = SNAP cit-Patents W3; 'snb' = LDBC SNB W2.")
     p.add_argument("--dataset", default=None,
                    help="Dataset name under input/plaintext/ (default: the "
                         "workload's default dataset).")
