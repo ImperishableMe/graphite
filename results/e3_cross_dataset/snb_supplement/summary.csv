@@ -1,0 +1,4 @@
+system,dataset,workload,query,edges,n_runs,median_ms,min_ms,max_ms,stddev_ms,output_rows
+full_mwj_no_filter,snb_sf30,snb,snb_2hop,12035314,0,,,,,OOM
+nebuladb,snb_sf30,snb,snb_2hop,12035314,1,109313.62599999999,109313.62599999999,109313.62599999999,0.0,106
+obliviator_chained,snb_sf30,snb,snb_2hop,12035314,0,,,,,TIMEOUT

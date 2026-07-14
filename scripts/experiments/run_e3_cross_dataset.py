@@ -14,17 +14,20 @@ CLAUDE.md "Experiment Comparison Systems"):
        `obliviator_khop_chained` (NFK kernel, 2K pairwise joins) on the
        workload's converted src.txt. The kernel takes the workload's payload
        shape (acct_cols, txn_cols) as CLI args — banking 3 4, AML 2 4,
-       patents 2 2 — so the next-hop key is extracted from the right column
-       for every workload.
+       patents 2 2, snb 2 3 — so the next-hop key is extracted from the right
+       column for every workload.
   3. Full MWJ            (runner key `full_mwj_no_filter`)
        `sgx_app --no-filter` on the anchored chain query: the full unfiltered
        multi-way join. Per the canonical system set, the unfiltered mode IS
        Full MWJ; the filtered variant is not run.
 
-Datasets (smallest edge count first; all four run by default):
+Datasets (smallest edge count first; all listed defaults run unless
+--datasets narrows them):
   banking_1M  (W1, generated, seed 42)   1M accounts /   5M edges
   hi_small    (IBM AML W4)             515k accounts / 5.1M edges
+  snb_sf30    (LDBC SNB W2)            165k accounts /  12M edges
   patents     (SNAP cit-Patents W3)    3.8M accounts /16.5M edges
+  hi_medium   (IBM AML W4)             2.1M accounts / 32M edges
   hi_large    (IBM AML W4)             2.1M accounts / 180M edges
       hi_large always uses the column-trimmed slim dataset
       (ibm_aml_hi_large_slim) + the reduced-capacity ./sgx_app_slim binary for
@@ -116,6 +119,13 @@ WORKLOADS = {
         "obl_converter": OBL_FK_DIR / "convert_patents_1hop.py",
         "obl_shape": (2, 2),  # "id,<gyear cat claims>" / "txn_id,acc_to"
     },
+    "snb": {
+        "onehop_bin": OBLIGRAPH_BUILD / "ldbc_snb_onehop",
+        "onehop_target": "ldbc_snb_onehop",
+        "query_prefix": "snb",
+        "obl_converter": OBL_FK_DIR / "convert_snb_1hop.py",
+        "obl_shape": (2, 3),  # "id,<city gender birthday>" / "txn_id,acc_to,knows_day"
+    },
 }
 
 # Dataset table, smallest edge count first so failures surface fast.
@@ -132,6 +142,8 @@ DATASETS = [
      "generate": True},
     {"label": "hi_small", "workload": "aml", "dir_name": "ibm_aml_hi_small",
      "accounts": 515_088, "edges": 5_078_345, "anchor": 224866},
+    {"label": "snb_sf30", "workload": "snb", "dir_name": "ldbc_snb_sf30",
+     "accounts": 165_430, "edges": 12_035_314, "anchor": 22701},
     {"label": "patents", "workload": "snap", "dir_name": "snap_patents",
      "accounts": 3_774_768, "edges": 16_518_948, "anchor": 3569342},
     {"label": "hi_medium", "workload": "aml", "dir_name": "ibm_aml_hi_medium",
@@ -465,7 +477,7 @@ def collect_metadata(args) -> dict:
             "slim txn table + sgx_app_slim for the Graphite/Full MWJ cells; "
             "the obliviator converter reads the full hi_large txn.csv (slim "
             "drops txn_time). obliviator_khop_chained receives the workload "
-            "payload shape (banking 3 4, AML 2 4, patents 2 2) so the "
+            "payload shape (banking 3 4, AML 2 4, patents 2 2, snb 2 3) so the "
             "next-hop key column is correct on every workload. Any binary "
             "OOM/crash/timeout is recorded per cell (output_rows=OOM/TIMEOUT, "
             "total_ms empty) and never aborts the sweep; datasets are "
