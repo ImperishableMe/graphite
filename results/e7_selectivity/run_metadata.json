@@ -1,0 +1,26 @@
+{
+  "started_at": "2026-07-16T14:20:48+0000",
+  "git_commit": "e7bc75f2ad381e8cdca4a3a6daa5263b8afbe810",
+  "git_branch": "worktree-e7-selectivity-sweep",
+  "hostname": "tdx-guest",
+  "nproc": 120,
+  "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
+  "python": "3.12.3",
+  "args": {
+    "points": null,
+    "systems": "nebuladb,obliviator_chained,full_mwj_no_filter",
+    "measurement_runs": 1,
+    "warmup_runs": 0,
+    "onehop_threads": 64,
+    "mwj_threads": 64,
+    "obliviator_threads": 64,
+    "cell_timeout": 7200,
+    "obliviator_timeout": 3600,
+    "data_root": "/home/tdx/bishwajit/Oblivious-Multi-Way-Band-Joins/input/plaintext",
+    "output_dir": "/home/tdx/bishwajit/Oblivious-Multi-Way-Band-Joins/.claude/worktrees/e7-selectivity-sweep/results/e7_selectivity",
+    "skip_build": true
+  },
+  "calibration_dataset": "/home/tdx/bishwajit/Oblivious-Multi-Way-Band-Joins/input/plaintext/ibm_aml_hi_small",
+  "note": "E7 predicate-selectivity sweep: fixed ibm_aml_hi_small input, 2-hop no-anchor chain, amount > theta on BOTH edges at 7 quantile thresholds (per-edge selectivity 0.001..1.0). Expected row counts come from the pandas oracle in calibration.json (SQLite-verified on the small points) and are cross-checked against every Graphite cell (rows_match; a 0 marks the cell INVALID). Obliviator has no filter support -> theta-invariant, run once per rep, exempt from rows_match (multi-edge collapse). Full MWJ runs --no-filter, identical at every theta -> attempted once per invocation. Graphite latency = onehop_ms + mwj_ms of the same rep; the hop table is filter-independent and built once per rep.",
+  "ended_at": "2026-07-16T16:32:37+0000"
+}

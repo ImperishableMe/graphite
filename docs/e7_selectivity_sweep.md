@@ -1,8 +1,36 @@
 # E7: Predicate-Selectivity Sweep (fixed input, varying filtered output)
 
-Status: designed and implemented 2026-07-16; smoke-verified on the two
-smallest points. Full-sweep results land in `results/e7_selectivity/`
-(summary.csv, e7_selectivity.png/.pdf).
+Status: designed, implemented, and run 2026-07-16. Results in
+`results/e7_selectivity/` (summary.csv, e7_selectivity.png/.pdf).
+
+## Results (2026-07-16 sweep, 1 run/cell, 64 threads)
+
+Every completed Graphite cell's output_rows matched the pandas oracle
+exactly (rows_match=1; the two smallest points additionally SQLite-verified).
+
+| s (per edge) | θ (amount)  | filtered rows | Graphite | vs Obliviator |
+|--------------|-------------|---------------|----------|---------------|
+| 0.001        | 416,225,565 | 2,404         | 42.6 s   | 27.5×         |
+| 0.01         | 13,524,530  | 82,596        | 43.5 s   | 27.0×         |
+| 0.05         | 623,757     | 753,013       | 46.9 s   | 25.0×         |
+| 0.1          | 137,275     | 2,478,413     | 59.7 s   | 19.6×         |
+| 0.25         | 12,298      | 12,272,345    | 130.3 s  | 9.0×          |
+| 0.5          | 1,415       | 39,282,354    | 343.7 s  | 3.4×          |
+| 1.0 (none)   | —           | 355,144,984   | OOM      | —             |
+
+Baselines (θ-invariant, one run): **Obliviator chained** 1,173.1 s of online
+oblivious work at every θ — and it reported exactly 355,144,984 rows, so its
+count matches the oracle too (the multi-edge-collapse quirk noted at design
+time did not manifest post the E3 k-hop payload fix). **Full MWJ**
+(`--no-filter`): OOM, as in E1.
+
+Shape: Graphite is flat (~43 s) while the filtered output is small — the
+fixed input-proportional oblivious work dominates — then bends into
+output-proportional growth (2.5M → 39.3M rows: 15.9× rows for 5.8× time),
+and at the unfiltered point it OOMs exactly like Full MWJ: when the filter
+does no work, nobody can win. Combined with E5 this pins the claim: Graphite
+costs Θ(input + *filtered* output); the baselines cost Θ(*unfiltered*
+output) regardless of the predicate.
 
 Numbering note: E7 in the *implemented* experiment series (E1 main, E2
 scaling, E3 cross-dataset, E4 query shapes, E5 output sensitivity). The

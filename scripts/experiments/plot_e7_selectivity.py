@@ -242,8 +242,8 @@ def main():
         ax.annotate(
             f"{FULL_MWJ[1]}: {mwj_fail}{budget} at every θ "
             f"(unfiltered join, {fmt_rows(int(full_mwj['expected_rows']))} rows)",
-            (x_lo, y_band), xytext=(2, 5), textcoords="offset points",
-            ha="left", fontsize=7.5, color=INK, zorder=4)
+            (x_hi, y_band), xytext=(0, 5), textcoords="offset points",
+            ha="right", fontsize=7.5, color=INK, zorder=4)
         max_val = y_band
 
     ax.set_xscale("log")
