@@ -1,0 +1,63 @@
+{
+  "dataset": "/home/tdx/bishwajit/Oblivious-Multi-Way-Band-Joins/input/plaintext/ibm_aml_hi_small",
+  "num_txns": 5078345,
+  "query_shape": "2-hop chain, no anchor, amount > theta on both edges",
+  "points": [
+    {
+      "s_target": 0.001,
+      "s_achieved": 0.0009997351499356581,
+      "theta": 416225565,
+      "passing_edges": 5077,
+      "expected_rows": 2404,
+      "query_file": "aml_2hop_sel_0p001.sql"
+    },
+    {
+      "s_target": 0.01,
+      "s_achieved": 0.010000108303000289,
+      "theta": 13524530,
+      "passing_edges": 50784,
+      "expected_rows": 82596,
+      "query_file": "aml_2hop_sel_0p010.sql"
+    },
+    {
+      "s_target": 0.05,
+      "s_achieved": 0.049998769284087634,
+      "theta": 623757,
+      "passing_edges": 253911,
+      "expected_rows": 753013,
+      "query_file": "aml_2hop_sel_0p050.sql"
+    },
+    {
+      "s_target": 0.1,
+      "s_achieved": 0.10000009845727299,
+      "theta": 137275,
+      "passing_edges": 507835,
+      "expected_rows": 2478413,
+      "query_file": "aml_2hop_sel_0p100.sql"
+    },
+    {
+      "s_target": 0.25,
+      "s_achieved": 0.24999384642043815,
+      "theta": 12298,
+      "passing_edges": 1269555,
+      "expected_rows": 12272345,
+      "query_file": "aml_2hop_sel_0p250.sql"
+    },
+    {
+      "s_target": 0.5,
+      "s_achieved": 0.4999118807406744,
+      "theta": 1415,
+      "passing_edges": 2538725,
+      "expected_rows": 39282354,
+      "query_file": "aml_2hop_sel_0p500.sql"
+    },
+    {
+      "s_target": 1.0,
+      "s_achieved": 1.0,
+      "theta": null,
+      "passing_edges": 5078345,
+      "expected_rows": 355144984,
+      "query_file": "aml_2hop_sel_1p000.sql"
+    }
+  ]
+}

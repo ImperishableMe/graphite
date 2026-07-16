@@ -52,6 +52,15 @@ class FilterInfo:
 
 
 @dataclass
+class TxnFilterInfo:
+    """Filter condition on a transaction edge."""
+    txn_alias: str
+    column: str
+    operator: str
+    value: str
+
+
+@dataclass
 class QueryElement:
     """An element in the decomposed query (always a hop)."""
     alias: str          # h1, h2, h3, ...
@@ -142,29 +151,48 @@ def build_graph(tables: List[Tuple[str, str]], join_conditions: List[str]) -> Tu
     return txns, accounts
 
 
-def parse_filters(filter_conditions: List[str], accounts: Dict[str, AccountInfo]) -> Dict[str, FilterInfo]:
+def parse_filters(
+    filter_conditions: List[str],
+    accounts: Dict[str, AccountInfo],
+    txns: Dict[str, TxnInfo]
+) -> Tuple[Dict[str, FilterInfo], Dict[str, List[TxnFilterInfo]]]:
     """
-    Parse filter conditions into FilterInfo objects.
+    Parse filter conditions into FilterInfo / TxnFilterInfo objects.
 
     Returns:
-        Mapping from account alias to FilterInfo
+        (account alias -> FilterInfo, txn alias -> list of TxnFilterInfo)
     """
     filters: Dict[str, FilterInfo] = {}
+    txn_filters: Dict[str, List[TxnFilterInfo]] = defaultdict(list)
 
     for cond in filter_conditions:
-        # Match: alias.column op value (e.g., a1.owner_id = 52)
+        # Match: alias.column op value (e.g., a1.owner_id = 52, t1.amount > 10000)
         match = re.match(r'(\w+)\.(\w+)\s*(=|<|>|<=|>=|<>|!=)\s*(.+)', cond)
-        if match:
-            alias, column, operator, value = match.groups()
-            if alias in accounts:
-                filters[alias] = FilterInfo(
-                    account_alias=alias,
-                    column=column,
-                    operator=operator,
-                    value=value.strip()
-                )
+        if not match:
+            raise ValueError(f"Could not parse filter condition: {cond}")
 
-    return filters
+        alias, column, operator, value = match.groups()
+        if alias in accounts:
+            filters[alias] = FilterInfo(
+                account_alias=alias,
+                column=column,
+                operator=operator,
+                value=value.strip()
+            )
+        elif alias in txns:
+            txn_filters[alias].append(TxnFilterInfo(
+                txn_alias=alias,
+                column=column,
+                operator=operator,
+                value=value.strip()
+            ))
+        else:
+            raise ValueError(
+                f"Filter references unknown alias '{alias}' "
+                f"(not an account or txn alias): {cond}"
+            )
+
+    return filters, dict(txn_filters)
 
 
 def build_filter_independent_decomposition(
@@ -335,9 +363,38 @@ def generate_filter_conditions(
     return conditions
 
 
+def generate_txn_filter_conditions(
+    elements: List[QueryElement],
+    txn_filters: Dict[str, List[TxnFilterInfo]]
+) -> List[str]:
+    """
+    Generate filter conditions on transaction edges, mapped to hop column names.
+
+    Each txn alias corresponds to exactly one hop (the hop built from that
+    edge). Edge payload columns appear UNPREFIXED in the hop table (e.g.
+    txn column `amount` is hop column `amount`), so only the alias changes:
+      t1.amount > 10000  ->  h1.amount > 10000
+    """
+    conditions = []
+    txn_to_hop = {elem.txn: elem.alias for elem in elements}
+
+    for txn_alias in sorted(txn_filters.keys(), key=_extract_number):
+        if txn_alias not in txn_to_hop:
+            raise ValueError(
+                f"Filter on txn alias '{txn_alias}' but no hop was built "
+                f"from that edge (txn not in any join condition?)"
+            )
+        hop_alias = txn_to_hop[txn_alias]
+        for finfo in txn_filters[txn_alias]:
+            conditions.append(f"{hop_alias}.{finfo.column} {finfo.operator} {finfo.value}")
+
+    return conditions
+
+
 def generate_optimized_query(
     elements: List[QueryElement],
-    filters: Dict[str, FilterInfo]
+    filters: Dict[str, FilterInfo],
+    txn_filters: Dict[str, List[TxnFilterInfo]]
 ) -> str:
     """Generate the optimized SQL query."""
 
@@ -348,8 +405,9 @@ def generate_optimized_query(
     # WHERE clause
     join_conditions = generate_join_conditions(elements)
     filter_conditions = generate_filter_conditions(elements, filters)
+    txn_filter_conditions = generate_txn_filter_conditions(elements, txn_filters)
 
-    all_conditions = join_conditions + filter_conditions
+    all_conditions = join_conditions + filter_conditions + txn_filter_conditions
 
     if all_conditions:
         where_clause = "WHERE " + "\n  AND ".join(all_conditions)
@@ -367,7 +425,7 @@ def rewrite_query(input_sql: str) -> str:
     txns, accounts = build_graph(tables, join_conditions)
 
     # Step 3: Parse filters
-    filters = parse_filters(filter_conditions, accounts)
+    filters, txn_filters = parse_filters(filter_conditions, accounts, txns)
 
     # Step 4: Build filter-independent decomposition
     elements = build_filter_independent_decomposition(txns, accounts)
@@ -378,10 +436,12 @@ def rewrite_query(input_sql: str) -> str:
         print(f"  {elem.alias}: {elem.src_account} -> {elem.txn} -> {elem.dest_account}", file=sys.stderr)
 
     if filters:
-        print(f"Filters: {list(filters.keys())}", file=sys.stderr)
+        print(f"Account filters: {list(filters.keys())}", file=sys.stderr)
+    if txn_filters:
+        print(f"Txn filters: {list(txn_filters.keys())}", file=sys.stderr)
 
     # Step 5: Generate the optimized query
-    return generate_optimized_query(elements, filters)
+    return generate_optimized_query(elements, filters, txn_filters)
 
 
 def main():
