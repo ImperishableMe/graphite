@@ -1,0 +1,3 @@
+system,s_target,s_achieved,theta,query,passing_edges,expected_rows,n_runs,median_ms,min_ms,max_ms,stddev_ms,output_rows,rows_match
+nebuladb,0.75,0.7499730719358374,184,aml_2hop_sel_0p750.sql,3808622,182661965,1,1458951.3090000001,1458951.3090000001,1458951.3090000001,0.0,182661965,1
+nebuladb,0.8,0.7996045955916741,118,aml_2hop_sel_0p800.sql,4060668,233108598,0,,,,,OOM,

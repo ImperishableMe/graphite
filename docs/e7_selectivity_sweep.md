@@ -1,9 +1,71 @@
 # E7: Predicate-Selectivity Sweep (fixed input, varying filtered output)
 
-Status: designed, implemented, and run 2026-07-16. Results in
-`results/e7_selectivity/` (summary.csv, e7_selectivity.png/.pdf).
+Status: designed, implemented, and run 2026-07-16; **redesigned to v2 the
+same day** (see "V2 design change"). Results in `results/e7_selectivity/`
+(summary.csv, e7_selectivity.png/.pdf).
 
-## Results (2026-07-16 sweep, 1 run/cell, 64 threads)
+## V2 design change (2026-07-16): isolate the decomposition
+
+V1 compared Graphite against Obliviator chained and Full MWJ `--no-filter`.
+Both baselines turned out to be pinned to the 355M-row *unfiltered* join at
+every θ (flat 19.6 min / flat OOM) — informative about filter pushdown, but
+they say nothing about Graphite's *decomposition*, and they can never track
+the sweep. V2 therefore changes the comparison, by explicit decision:
+
+- **Obliviator chained is removed** — it has no filter support at all, so in
+  a selectivity sweep it is bounded by the full unfiltered join and is not a
+  meaningful comparator here.
+- **Full MWJ now runs the FILTERED queries** (sgx_app on the original
+  5-table query, no `--no-filter`) — a deliberate E7-only exception to the
+  "Full MWJ = no-filter" presentation rule, labeled "Full MWJ (filtered)" in
+  the figure. Both systems now apply the *same* predicates on the *same*
+  engine, so the only differentiating factor between the two curves is the
+  decomposition (one-hop + hop-table MWJ vs monolithic MWJ). Full MWJ is
+  θ-dependent in v2 and runs per point, subject to the same oracle
+  row-count check as Graphite.
+
+V1's measured numbers are kept in the "V1 results" section below for the
+record.
+
+## V2 results (2026-07-16, 1 run/cell, 64 threads, all cells oracle-matched)
+
+| s (per edge) | filtered rows | Graphite | Full MWJ (filtered) | gap |
+|--------------|---------------|-----------|---------------------|------|
+| 0.001        | 2,404         | 43.8 s    | 85.3 s              | 1.95× |
+| 0.01         | 82,596        | 43.9 s    | 85.7 s              | 1.95× |
+| 0.05         | 753,013       | 48.5 s    | 97.9 s              | 2.02× |
+| 0.1          | 2,478,413     | 61.5 s    | 136.1 s             | 2.21× |
+| 0.25         | 12,272,345    | 130.7 s   | 334.9 s             | 2.56× |
+| 0.5          | 39,282,354    | 332.7 s   | 944.6 s             | 2.84× |
+| 0.55         | 49,322,515    | 414.2 s   | 1,173.6 s           | 2.83× |
+| 0.6          | 63,353,620    | 537.3 s   | 1,514.7 s           | 2.82× |
+| 0.65         | 95,761,288    | 796.6 s   | 2,274.5 s           | 2.86× |
+| 0.7          | 134,317,360   | 1,140.3 s | **OOM**             | —    |
+| 0.75         | 182,661,965   | 1,459.0 s | (beyond MWJ ceiling)| —    |
+| 0.8          | 233,108,598   | **OOM**   | —                   | —    |
+| 1.0 (none)   | 355,144,984   | **OOM**   | aborted (trajectory to OOM) | — |
+
+Decomposition buys two things, both measured on identical filters and the
+same engine:
+
+1. **Speed**: a 1.95×→2.86× gap that widens with the filtered output. Both
+   curves are near-linear in output rows at the top end; the gap is the
+   monolithic plan's price at every feasible point.
+2. **Reach**: Graphite completes 183M-row outputs (s=0.75, 24.3 min, peak
+   ~398 GB of the 471 GB box); the monolithic plan OOMs at 134M (s=0.7).
+   Graphite's feasible region extends ~1.9× further, and it finishes its
+   183M point faster (1,459 s) than Full MWJ finishes its 96M point
+   (2,274.5 s). Ceilings bracketed empirically: Graphite ∈ [183M, 233M),
+   Full MWJ ∈ [96M, 134M).
+
+Notes: the s=0.55–0.8 points were added as ceiling probes after the main
+sweep (separate runner invocations, `probe*/` subdirs; merged into the main
+CSVs). Full MWJ's unfiltered (s=1.0) attempt was aborted by decision after
+39 min at ~334 GB on a clear OOM trajectory — recorded as an abort, not a
+measurement; Graphite's own unfiltered attempt OOMed, so the convergence
+point stands either way.
+
+## V1 results (superseded by v2; 2026-07-16 sweep, 1 run/cell, 64 threads)
 
 Every completed Graphite cell's output_rows matched the pandas oracle
 exactly (rows_match=1; the two smallest points additionally SQLite-verified).
@@ -38,26 +100,24 @@ E-numbers in the older `docs/experiments.md` planning doc do not correspond
 to this series ("E6" there is the one-hop thread-scaling experiment,
 `results/one_hop_thread_scaling/`).
 
-## Claim demonstrated
+## Claim demonstrated (v2)
 
 Complement of E5. E5 held the input fixed and grew the *unfiltered* output:
-baselines blow up, Graphite stays flat. The skeptic's follow-up is "Graphite
-looks flat only because the queries are highly selective — what happens when
-the filter lets more through?" E7 answers it: input and query structure are
-held perfectly constant and only the predicate threshold θ moves, sweeping
-the *filtered* output across five orders of magnitude. Expected shape:
+baselines blow up, Graphite stays flat. E7 holds input and query structure
+perfectly constant and moves only the predicate threshold θ, sweeping the
+*filtered* output across five orders of magnitude — and both systems apply
+the **same filters on the same engine**, so the gap between the two curves
+is attributable to exactly one thing: **the decomposition**.
 
-- **Graphite** tracks the filtered output — honestly Θ(input + filtered
-  output), converging toward Full-MWJ behavior (and possibly OOM) as the
-  filter approaches a no-op. When the filter does no work, nobody can win.
-- **Obliviator chained** cannot apply the predicate at all (`amount` is
-  opaque payload to it) — flat θ-invariant line at its unfiltered-chain cost.
-- **Full MWJ** runs `--no-filter`, so its execution is *identical* at every
-  θ — one attempt, expected OOM at the 355M-row unfiltered output (as in E1).
+- **Graphite** (decomposed): one-hop materializes the hop table once
+  (filter-independent, input-proportional), then the rewritten 2-hop hop
+  query runs with the predicates pushed onto the hop aliases.
+- **Full MWJ (filtered)** (monolithic): sgx_app executes the original
+  5-table query with the same predicates pushed onto the txn tables.
 
-Together E5+E7 pin the claim: Graphite's cost tracks the filtered output and
-nothing else; the baselines' cost tracks the unfiltered output and nothing
-else.
+Expected shape: both curves rise with the filtered output at the loose end;
+the vertical gap at every θ is the price of joining monolithically instead
+of through the decomposed hop table.
 
 ## Query and sweep design
 
@@ -106,11 +166,10 @@ never the calibration table taken on faith:
    exactly those counts (`match=1`).
 
 Verification is count-based by explicit scope decision (2026-07-16);
-row-content diffing is out of scope for E7. Obliviator is exempt from
-`rows_match` (perf-only: its converter collapses multi-edges, so it reports
-149,212,726 unfiltered 2-hop rows — a known data-model quirk, not a
-mismatch). Full MWJ, if it ever completes, is checked against the unfiltered
-355,144,984.
+row-content diffing is out of scope for E7. In v2 BOTH systems are subject
+to `rows_match` at every point — the two engines must agree with the oracle
+and hence with each other, which is itself part of the decomposition claim
+(same answer, different plan).
 
 ## Rewriter fix (prerequisite, landed with this experiment)
 
@@ -129,15 +188,15 @@ dropping them.
 `scripts/experiments/run_e7_selectivity.py` (machinery imported from
 `run_e3_cross_dataset`, structure cloned from `run_e5_density`):
 
-- Points run smallest expected output first; once Graphite fails (OOM or
-  timeout) at a point, every point with an expected output at least as large
-  is recorded SKIPPED instead of re-failed (all reps).
-- The hop table is filter-independent: built once per rep and shared by all
-  points. Graphite latency = onehop_ms + mwj_ms of the same rep.
-- Obliviator chained is θ-invariant: converted once, run once per rep.
-- Full MWJ is attempted exactly once per invocation (identical work at every
-  θ), after the sweep, with the cell timeout.
-- Defaults: 1 warm-up + 3 measurement reps, 64 threads, 7200s/3600s budgets.
+- Points run smallest expected output first; per-system failure ratchet —
+  once a system fails (OOM or timeout) at a point, every point with an
+  expected output at least as large is recorded SKIPPED for that system
+  instead of re-failed (all reps).
+- Both systems run per point: Graphite = rewritten hop query over the
+  per-rep hop table (latency = onehop_ms + mwj_ms of the same rep; the hop
+  table is filter-independent and shared by all points); Full MWJ = the
+  original query with its filters on the raw tables (no `--no-filter`).
+- Defaults: 1 warm-up + 3 measurement reps, 64 threads, 7200s cell budget.
 - CSVs (`raw_runs.csv`, `summary.csv`) are rewritten after every cell.
 
 Run:
@@ -151,7 +210,8 @@ Run:
 
 `plot_e7_selectivity.py`: panel (a) — filtered output rows per selectivity
 point (the knob works); panel (b) — latency vs *measured* filtered output
-rows, log-log, slope-1 guide anchored at Graphite's largest completed point,
-flat lines for the θ-invariant baselines, TIMEOUT as an open marker at the
-budget, OOM as an ✕ at the floor, INVALID cells ringed in red. Presentation
-names per CLAUDE.md: Graphite / Obliviator chained / Full MWJ.
+rows, log-log, one swept line per system, slope-1 guide anchored at
+Graphite's largest completed point, TIMEOUT as an open marker at the budget,
+OOM as an ✕ at the floor, INVALID cells ringed in red. Presentation names:
+Graphite and "Full MWJ (filtered)" — the explicit label marks the E7-only
+deviation from the canonical no-filter Full MWJ.

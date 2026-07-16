@@ -84,22 +84,6 @@
       "query_file": "aml_2hop_sel_0p700.sql"
     },
     {
-      "s_target": 0.75,
-      "s_achieved": 0.7499730719358374,
-      "theta": 184,
-      "passing_edges": 3808622,
-      "expected_rows": 182661965,
-      "query_file": "aml_2hop_sel_0p750.sql"
-    },
-    {
-      "s_target": 0.8,
-      "s_achieved": 0.7996045955916741,
-      "theta": 118,
-      "passing_edges": 4060668,
-      "expected_rows": 233108598,
-      "query_file": "aml_2hop_sel_0p800.sql"
-    },
-    {
       "s_target": 1.0,
       "s_achieved": 1.0,
       "theta": null,

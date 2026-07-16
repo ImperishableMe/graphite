@@ -35,8 +35,11 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# Target per-edge selectivities; 1.0 = unfiltered.
-TARGET_SELECTIVITIES = [0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0]
+# Target per-edge selectivities; 1.0 = unfiltered. The 0.55-0.7 points probe
+# how far Graphite can be pushed between the comfortable s=0.5 (39.3M rows)
+# and the OOM at s=1.0 (355M rows).
+TARGET_SELECTIVITIES = [0.001, 0.01, 0.05, 0.1, 0.25, 0.5,
+                        0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 1.0]
 
 QUERY_TEMPLATE_FILTERED = """\
 SELECT * FROM account AS a1, txn AS t1, account AS a2, txn AS t2, account AS a3

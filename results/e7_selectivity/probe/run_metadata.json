@@ -1,25 +1,24 @@
 {
-  "started_at": "2026-07-16T16:58:48+0000",
+  "started_at": "2026-07-16T19:04:09+0000",
   "git_commit": "904ca33cc03b8b5bd22acdd92d1f443e246529fb",
   "git_branch": "worktree-e7-selectivity-sweep",
   "hostname": "tdx-guest",
   "nproc": 120,
   "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
   "python": "3.12.3",
-  "merge_note": "raw_runs.csv and summary.csv are the union of four runner invocations on 2026-07-16: the main v2 sweep (points 0.001-1.0, both systems; its full_mwj s=1.0 cell was aborted by decision after ~39 min at ~334 GB on a clear OOM trajectory), plus the ceiling probes in probe/ (nebuladb 0.55-0.7), probe_hi/ (nebuladb 0.75-0.8), and probe_mwj/ (full_mwj 0.55-0.7). Each probe dir carries its own run_metadata.json; the args block below is from the sanity invocation that last wrote this file.",
   "args": {
-    "points": "0.001",
-    "systems": "nebuladb,full_mwj",
+    "points": "0.55,0.6,0.65,0.7",
+    "systems": "nebuladb",
     "measurement_runs": 1,
     "warmup_runs": 0,
     "onehop_threads": 64,
     "mwj_threads": 64,
     "cell_timeout": 7200,
     "data_root": "/home/tdx/bishwajit/Oblivious-Multi-Way-Band-Joins/input/plaintext",
-    "output_dir": "/home/tdx/bishwajit/Oblivious-Multi-Way-Band-Joins/.claude/worktrees/e7-selectivity-sweep/results/e7_selectivity",
+    "output_dir": "results/e7_selectivity/probe",
     "skip_build": true
   },
   "calibration_dataset": "/home/tdx/bishwajit/Oblivious-Multi-Way-Band-Joins/input/plaintext/ibm_aml_hi_small",
   "note": "E7 predicate-selectivity sweep: fixed ibm_aml_hi_small input, 2-hop no-anchor chain, amount > theta on BOTH edges at 7 quantile thresholds (per-edge selectivity 0.001..1.0). Isolates the impact of decomposition: BOTH systems apply the same filters \u2014 Graphite via the decomposed one-hop + rewritten hop query, Full MWJ (filtered; E7-only exception to the no-filter presentation rule, decided 2026-07-16) via sgx_app on the original query. Obliviator chained is excluded (no filter support). Expected row counts come from the pandas oracle in calibration.json (SQLite-verified on the small points) and are cross-checked against every cell of both systems (rows_match; a 0 marks the cell INVALID). Graphite latency = onehop_ms + mwj_ms of the same rep; the hop table is filter-independent and built once per rep.",
-  "ended_at": "2026-07-16T17:01:43+0000"
+  "ended_at": "2026-07-16T19:58:38+0000"
 }
