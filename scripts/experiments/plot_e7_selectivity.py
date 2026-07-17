@@ -172,25 +172,6 @@ def main():
                         ha="left" if below else "center",
                         va="top" if below else "bottom",
                         fontsize=8, color=color, zorder=4)
-        if key == "nebuladb":
-            # Selectivity labels once, tucked between the two curves above
-            # the Graphite points (its value labels occupy the space below).
-            # The probe points (0.55-0.75) sit too close together on the log
-            # axis to label individually — annotate only the sparse
-            # canonical points plus the topmost completed one.
-            # GAP_SELS points carry the gap connector instead of an s label.
-            labeled = {0.001, 0.01, 0.05, 0.1, 0.25, 0.5} - set(GAP_SELS)
-            if sels:
-                labeled.add(sels[-1])
-            for x, y, s in zip(xs, ys, sels):
-                if s in labeled:
-                    # The topmost point's label stacks under its value
-                    # label, right of the point (empty space at the edge).
-                    last = sels and s == sels[-1]
-                    ax.annotate(fmt_sel(s), (x, y),
-                                xytext=(8, -22) if last else (2, 6),
-                                textcoords="offset points", ha="left",
-                                fontsize=6.5, color=MUTED, zorder=4)
         for x, y in invalid_pts:
             ax.plot([x], [y], marker="o", markersize=11,
                     markerfacecolor="none", markeredgecolor=INVALID_RED,
@@ -256,8 +237,6 @@ def main():
     ax.set_xlabel("Measured filtered 2-hop output rows (log scale)",
                   fontsize=9, color=INK)
     ax.set_ylabel("Latency (s, log scale)", fontsize=9, color=INK)
-    ax.set_title("Same filters — decomposition is the only difference",
-                 fontsize=10, color=INK)
     ax.legend(handles=[Line2D([], [], color=c, marker="o", markersize=5,
                               linewidth=2, markeredgecolor="white", label=n)
                        for _, n, c in SYSTEMS],
