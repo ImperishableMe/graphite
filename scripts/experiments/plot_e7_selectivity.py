@@ -2,25 +2,22 @@
 """
 E7 predicate-selectivity plot.
 
-Reads the summary.csv written by run_e7_selectivity.py and renders two panels:
+Reads the summary.csv written by run_e7_selectivity.py and renders a single
+log-log panel: latency vs MEASURED filtered output rows, one swept line per
+system. Both systems apply the SAME filters, so the only differentiating
+factor is the decomposition: Graphite = decomposed one-hop + hop-table MWJ;
+Full MWJ = the same sgx_app engine run monolithically on the original
+5-table query (filtered — a deliberate E7-only exception to the "Full MWJ =
+no-filter" presentation rule).
 
-  (a) Setup — filtered 2-hop output rows per per-edge selectivity point
-      (log scale bars): the predicate threshold theta is the only knob, and it
-      sweeps the filtered output across five orders of magnitude on a fixed
-      input.
-  (b) Result — latency vs MEASURED filtered output rows, log-log, one swept
-      line per system. Both systems apply the SAME filters, so the only
-      differentiating factor is the decomposition: Graphite = decomposed
-      one-hop + hop-table MWJ; Full MWJ = the same sgx_app engine run
-      monolithically on the original 5-table query (filtered — a deliberate
-      E7-only exception to the "Full MWJ = no-filter" presentation rule).
-
-System presentation names per CLAUDE.md: nebuladb -> Graphite; full_mwj is
-labeled "Full MWJ (filtered)" to distinguish it from the no-filter variant
-used in other figures. Failed cells are drawn honestly (TIMEOUT = open marker
-at the budget; OOM = x marker at the floor), never as a fake latency. Cells
-whose measured row count contradicts the oracle (rows_match=0) are INVALID:
-drawn with a red ring and label, and reported on stderr.
+Each completed point is annotated with its latency (the y-axis is log scale,
+so values are hard to read off the axis). System presentation names per
+CLAUDE.md: nebuladb -> Graphite; full_mwj is labeled "Full MWJ (filtered)"
+to distinguish it from the no-filter variant used in other figures. Failed
+cells are drawn honestly (TIMEOUT = open marker at the budget; OOM = x
+marker at the floor), never as a fake latency. Cells whose measured row
+count contradicts the oracle (rows_match=0) are INVALID: drawn with a red
+ring and label, and reported on stderr.
 
 Usage:
   python3 scripts/experiments/plot_e7_selectivity.py [summary.csv]
@@ -104,36 +101,10 @@ def main():
         rows.sort(key=lambda c: int(c["expected_rows"]))
     if "nebuladb" not in by_system:
         sys.exit("no nebuladb cells in summary")
-    points = by_system["nebuladb"]  # panel (a) uses the oracle sweep itself
+    points = by_system["nebuladb"]
 
-    fig, (ax_a, ax_b) = plt.subplots(
-        1, 2, figsize=(9.6, 3.6), dpi=200, gridspec_kw={"width_ratios": [1, 1.35]})
+    fig, ax = plt.subplots(figsize=(7.2, 4.2), dpi=200)
     fig.patch.set_facecolor("white")
-
-    # ------------------------------------------------------------------ (a)
-    # The knob: per-edge selectivity -> filtered 2-hop output rows (oracle).
-    ax = ax_a
-    ax.set_facecolor("white")
-    for i, c in enumerate(points):
-        val = int(c["expected_rows"])
-        ax.bar(i, val, width=0.62, color="#2a78d6", edgecolor="white",
-               linewidth=0.6, zorder=3)
-        ax.annotate(fmt_rows(val), (i, val), xytext=(0, 3),
-                    textcoords="offset points", ha="center", va="bottom",
-                    fontsize=7, color=INK, zorder=4)
-    ax.set_yscale("log")
-    ymax = max(int(c["expected_rows"]) for c in points)
-    ax.set_ylim(1, ymax * 8)
-    ax.set_ylabel("Filtered 2-hop output rows (log scale)", fontsize=9,
-                  color=INK)
-    ax.set_xticks(range(len(points)))
-    ax.set_xticklabels([fmt_sel(float(c["s_target"])) for c in points],
-                       fontsize=7.5, color=INK, rotation=30, ha="right")
-    ax.set_title("(a) Same input, predicate sweeps the output",
-                 fontsize=9.5, color=INK)
-
-    # ------------------------------------------------------------------ (b)
-    ax = ax_b
     ax.set_facecolor("white")
     max_val = 0.0
 
@@ -166,21 +137,6 @@ def main():
     floor_s = (10.0 ** (math.floor(math.log10(min(completed))) - 1)
                if completed else 1e-1)
     max_val = max(max_val, floor_s)
-    all_x = ([x for xs, *_ in series.values() for x in xs]
-             + [f[0] for *_, fails in series.values() for f in fails])
-    x_lo = min(all_x or [1])
-
-    # Slope-1 guide (cost proportional to filtered output), anchored to the
-    # largest completed Graphite point.
-    gxs, gys = series["nebuladb"][:2]
-    if len(gxs) >= 2:
-        x1, y1 = gxs[-1], gys[-1]
-        ax.plot([x_lo, x1], [y1 * x_lo / x1, y1], linestyle=(0, (4, 3)),
-                color=BASELINE, linewidth=1.2, zorder=1)
-        xm = (x_lo * x1) ** 0.5
-        ax.annotate("slope 1 (∝ filtered output)", (xm, y1 * xm / x1),
-                    xytext=(6, -14), textcoords="offset points",
-                    ha="left", fontsize=7, color=MUTED)
 
     for si, (key, disp, color) in enumerate(SYSTEMS):
         xs, ys, sels, invalid_pts, fails = series[key]
@@ -190,20 +146,37 @@ def main():
                     markeredgewidth=0.8, zorder=3)
             ax.annotate(disp, (xs[-1], ys[-1]), xytext=(6, 0),
                         textcoords="offset points", ha="left", va="center",
-                        fontsize=7.5, color=INK, zorder=4)
+                        fontsize=8, color=INK, zorder=4)
+        # Per-point latency values: the log y-axis makes magnitudes hard to
+        # read, so print each completed point's time. Labels fan steeply
+        # (60 deg) so the dense top end stays legible — above the upper
+        # curve (Full MWJ), below the lower one (Graphite).
+        below = key == "nebuladb"
+        for x, y in zip(xs, ys):
+            ax.annotate(fmt_seconds(y), (x, y),
+                        xytext=(0, -9) if below else (0, 9),
+                        textcoords="offset points",
+                        ha="right" if below else "left",
+                        va="top" if below else "bottom",
+                        rotation=70, fontsize=8, color=color, zorder=4)
         if key == "nebuladb":
-            # Selectivity labels once, under the Graphite series. The probe
-            # points (0.55-0.7) sit too close together on the log axis to
-            # label individually — annotate only the sparse canonical points
-            # plus the topmost completed one.
+            # Selectivity labels once, tucked between the two curves above
+            # the Graphite points (its value labels occupy the space below).
+            # The probe points (0.55-0.75) sit too close together on the log
+            # axis to label individually — annotate only the sparse
+            # canonical points plus the topmost completed one.
             labeled = {0.001, 0.01, 0.05, 0.1, 0.25, 0.5}
             if sels:
                 labeled.add(sels[-1])
             for x, y, s in zip(xs, ys, sels):
                 if s in labeled:
-                    ax.annotate(fmt_sel(s), (x, y), xytext=(0, -11),
-                                textcoords="offset points", ha="center",
-                                fontsize=6, color=MUTED, zorder=4)
+                    # The topmost point's label sits right of the point,
+                    # under the series name (empty space at the plot edge).
+                    last = sels and s == sels[-1]
+                    ax.annotate(fmt_sel(s), (x, y),
+                                xytext=(8, -11) if last else (2, 6),
+                                textcoords="offset points", ha="left",
+                                fontsize=6.5, color=MUTED, zorder=4)
         for x, y in invalid_pts:
             ax.plot([x], [y], marker="o", markersize=11,
                     markerfacecolor="none", markeredgecolor=INVALID_RED,
@@ -245,30 +218,29 @@ def main():
         if not tick_xs or math.log10(x / tick_xs[-1]) >= 0.2:
             tick_xs.append(x)
     ax.set_xticks(tick_xs)
-    ax.set_xticklabels([fmt_rows(x) for x in tick_xs], fontsize=6.5,
+    ax.set_xticklabels([fmt_rows(x) for x in tick_xs], fontsize=7,
                        rotation=40, ha="right")
     ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
     ax.set_xlabel("Measured filtered 2-hop output rows (log scale)",
                   fontsize=9, color=INK)
     ax.set_ylabel("Latency (s, log scale)", fontsize=9, color=INK)
-    ax.set_title("(b) Same filters — decomposition is the only difference",
-                 fontsize=9.5, color=INK)
+    ax.set_title("Same filters — decomposition is the only difference",
+                 fontsize=10, color=INK)
     ax.legend(handles=[Line2D([], [], color=c, marker="o", markersize=5,
                               linewidth=2, markeredgecolor="white", label=n)
                        for _, n, c in SYSTEMS],
-              fontsize=7.5, frameon=False, loc="upper left")
+              fontsize=8, frameon=False, loc="upper left")
 
-    for ax in (ax_a, ax_b):
-        ax.yaxis.grid(True, color=GRID, linewidth=0.7, zorder=0)
-        ax.set_axisbelow(True)
-        for spine in ("top", "right"):
-            ax.spines[spine].set_visible(False)
-        for spine in ("left", "bottom"):
-            ax.spines[spine].set_color(BASELINE)
-        ax.tick_params(colors=MUTED, labelsize=8)
-        for lbl in ax.get_xticklabels() + ax.get_yticklabels():
-            lbl.set_color(INK)
+    ax.yaxis.grid(True, color=GRID, linewidth=0.7, zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_color(BASELINE)
+    ax.tick_params(colors=MUTED, labelsize=8)
+    for lbl in ax.get_xticklabels() + ax.get_yticklabels():
+        lbl.set_color(INK)
 
     fig.tight_layout()
     for ext in ("png", "pdf"):

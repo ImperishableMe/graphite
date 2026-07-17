@@ -208,10 +208,10 @@ Run:
 
 ## Presentation
 
-`plot_e7_selectivity.py`: panel (a) — filtered output rows per selectivity
-point (the knob works); panel (b) — latency vs *measured* filtered output
-rows, log-log, one swept line per system, slope-1 guide anchored at
-Graphite's largest completed point, TIMEOUT as an open marker at the budget,
-OOM as an ✕ at the floor, INVALID cells ringed in red. Presentation names:
-Graphite and "Full MWJ (filtered)" — the explicit label marks the E7-only
-deviation from the canonical no-filter Full MWJ.
+`plot_e7_selectivity.py`: a single log-log panel — latency vs *measured*
+filtered output rows, one swept line per system, every completed point
+annotated with its latency (the log y-axis hides magnitudes otherwise),
+TIMEOUT as an open marker at the budget, OOM as an ✕ at the floor, INVALID
+cells ringed in red. Presentation names: Graphite and "Full MWJ (filtered)"
+— the explicit label marks the E7-only deviation from the canonical
+no-filter Full MWJ.
