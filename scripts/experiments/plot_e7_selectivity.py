@@ -53,6 +53,11 @@ GRID = "#e1e0d9"
 BASELINE = "#c3c2b7"
 INVALID_RED = "#d63b2a"
 
+# Selectivities where the decomposition-gap connector is drawn (one in the
+# flat region, one near Full MWJ's ceiling); these points get the connector
+# multiplier instead of a gray s label.
+GAP_SELS = (0.1, 0.65)
+
 
 def fmt_seconds(sec: float) -> str:
     if sec >= 3600:
@@ -147,34 +152,43 @@ def main():
             ax.annotate(disp, (xs[-1], ys[-1]), xytext=(6, 0),
                         textcoords="offset points", ha="left", va="center",
                         fontsize=8, color=INK, zorder=4)
-        # Per-point latency values: the log y-axis makes magnitudes hard to
-        # read, so print each completed point's time. Labels fan steeply
-        # (60 deg) so the dense top end stays legible — above the upper
-        # curve (Full MWJ), below the lower one (Graphite).
+        # Latency values only at the endpoints (flat-region cost and the
+        # ceiling); per-point labels congest the dense top end, and the
+        # curve interpolates the middle. Exact numbers live in the doc's
+        # results table; the gap connectors below carry the ratio story.
         below = key == "nebuladb"
-        for x, y in zip(xs, ys):
-            ax.annotate(fmt_seconds(y), (x, y),
-                        xytext=(0, -9) if below else (0, 9),
-                        textcoords="offset points",
-                        ha="right" if below else "left",
+        if xs:
+            ax.annotate(fmt_seconds(ys[0]), (xs[0], ys[0]),
+                        xytext=(0, -10) if below else (0, 10),
+                        textcoords="offset points", ha="center",
                         va="top" if below else "bottom",
-                        rotation=70, fontsize=8, color=color, zorder=4)
+                        fontsize=8, color=color, zorder=4)
+            # Graphite's last-point label goes below-right (under the series
+            # name, where the plot is empty); the curve itself occupies the
+            # space below-left.
+            ax.annotate(fmt_seconds(ys[-1]), (xs[-1], ys[-1]),
+                        xytext=(6, -11) if below else (0, 10),
+                        textcoords="offset points",
+                        ha="left" if below else "center",
+                        va="top" if below else "bottom",
+                        fontsize=8, color=color, zorder=4)
         if key == "nebuladb":
             # Selectivity labels once, tucked between the two curves above
             # the Graphite points (its value labels occupy the space below).
             # The probe points (0.55-0.75) sit too close together on the log
             # axis to label individually — annotate only the sparse
             # canonical points plus the topmost completed one.
-            labeled = {0.001, 0.01, 0.05, 0.1, 0.25, 0.5}
+            # GAP_SELS points carry the gap connector instead of an s label.
+            labeled = {0.001, 0.01, 0.05, 0.1, 0.25, 0.5} - set(GAP_SELS)
             if sels:
                 labeled.add(sels[-1])
             for x, y, s in zip(xs, ys, sels):
                 if s in labeled:
-                    # The topmost point's label sits right of the point,
-                    # under the series name (empty space at the plot edge).
+                    # The topmost point's label stacks under its value
+                    # label, right of the point (empty space at the edge).
                     last = sels and s == sels[-1]
                     ax.annotate(fmt_sel(s), (x, y),
-                                xytext=(8, -11) if last else (2, 6),
+                                xytext=(8, -22) if last else (2, 6),
                                 textcoords="offset points", ha="left",
                                 fontsize=6.5, color=MUTED, zorder=4)
         for x, y in invalid_pts:
@@ -207,6 +221,23 @@ def main():
                             (x * jitter, floor_s * 1.35), xytext=(0, y_off),
                             textcoords="offset points", ha="center",
                             fontsize=6.5, color=color, zorder=4)
+
+    # Gap connectors: the decomposition penalty, drawn where both systems
+    # completed — one in the flat region, one near Full MWJ's ceiling.
+    g_xs, g_ys, g_sels = series["nebuladb"][:3]
+    m_xs, m_ys, m_sels = series.get("full_mwj", ([], [], []))[:3]
+    g_by_s = dict(zip(g_sels, zip(g_xs, g_ys)))
+    m_by_s = dict(zip(m_sels, zip(m_xs, m_ys)))
+    for s_gap in GAP_SELS:
+        if s_gap in g_by_s and s_gap in m_by_s:
+            (x, y_lo), (_, y_hi) = g_by_s[s_gap], m_by_s[s_gap]
+            ax.plot([x, x], [y_lo, y_hi], color=MUTED, linewidth=1,
+                    linestyle=(0, (2, 2)), zorder=2)
+            ax.annotate(f"{y_hi / y_lo:.1f}×", (x, (y_lo * y_hi) ** 0.5),
+                        ha="center", va="center", fontsize=8.5, color=INK,
+                        bbox=dict(facecolor="white", edgecolor="none",
+                                  pad=1.2),
+                        zorder=4)
 
     ax.set_xscale("log")
     ax.set_yscale("log")
