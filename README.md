@@ -1,257 +1,203 @@
-# Oblivious Multi-Way Join with Constant Memory Overhead
+# Graphite: An Oblivious Property Graph Database
 
-An SGX-based implementation of oblivious multi-way join algorithms that maintain constant memory overhead while ensuring data-oblivious execution patterns for secure computation on untrusted cloud platforms.
+A TDX-based implementation of an oblivious property graph database that answers
+multi-hop graph queries without revealing anything about the data through memory
+access patterns, beyond the public input table sizes and the size of the filtered
+result.
 
 ## Overview
 
-This project implements an oblivious multi-way join system that:
-- Executes SQL joins inside Intel SGX enclaves for confidentiality
+This project implements an oblivious graph query engine that:
+- Decomposes multi-hop queries into independent one-hop operators plus a residual join
+- Applies predicate filtering in place, so the unfiltered intermediate join is never materialized
 - Maintains data-oblivious memory access patterns to prevent side-channel leaks
-- Achieves constant memory overhead regardless of join selectivity
-- Supports arbitrary multi-way joins with complex predicates
+- Runs inside an Intel TDX trusted VM, which encrypts memory transparently
+- Supports chain, fan-in, fan-out, and tree query patterns
 
-Based on the research paper: "Oblivious Multi-Way Joins with Constant Memory Overhead" (to appear)
+Based on the research paper: "Graphite: An Oblivious Property Graph Database" (to appear)
 
 ## Features
 
-- **Secure Execution**: Runs inside Intel SGX enclaves to protect data confidentiality
-- **Oblivious Algorithms**: Memory access patterns are independent of data values
-- **Constant Memory**: Uses only O(N) memory for N input tuples
-- **Multi-Way Joins**: Supports chains, stars, cycles, and cliques
-- **Batch Processing**: Optimized ecall batching to reduce SGX overhead
-- **Encrypted I/O**: Supports AES-encrypted input/output data
+- **Oblivious Execution**: Memory access patterns depend only on input sizes, output size, and the query
+- **Hidden Intermediates**: Unlike prior oblivious joins, intermediate result sizes are never revealed
+- **One-Hop Operator**: Indexed oblivious hop with parallel source/destination branches
+- **Parallel Execution**: Thread counts and work partitioning derived only from public parameters
+- **Two Baselines Included**: Full multi-way join and the Obliviator chained scheme, for comparison
 
 ## Prerequisites
 
-- Intel CPU with SGX support
-- Ubuntu 20.04 or later
-- Intel SGX SDK and PSW
-- GCC 9+ with C++17 support
+- Linux x86-64 (Ubuntu 20.04 or later)
+- GCC 9+ with C++17 support (C++20 for the one-hop operators)
+- CMake 3.14 or later
 - Make build system
+- Python 3.8+ with `matplotlib` and `pandas` (for plots and calibration)
 
-## Building
+No SGX SDK is required. The system targets Intel TDX, which encrypts the entire guest
+VM, so there is no enclave boundary and no application-level cryptography. The main
+binary is still named `sgx_app` for historical reasons, but it builds and runs on any
+ordinary Linux machine. A TDX guest is needed for the security guarantee in
+deployment, not for reproducing performance results.
 
 ```bash
-make clean
-make
-```
-
-For debug builds:
-```bash
-DEBUG=1 make
+python3 -m pip install matplotlib pandas
 ```
 
 ## Usage
 
-### Basic Join Execution
-
-```bash
-# Run a join query on encrypted data
-./sgx_app <query.sql> <encrypted_data_dir> <output.csv>
-
-# Example with included test data
-./sgx_app input/queries/tpch_tb1.sql input/encrypted/data_0_001 output.csv
-```
-
-### Data Encryption
-
-```bash
-# Encrypt plaintext CSV files for use with SGX
-./encrypt_tables <plaintext_dir> <encrypted_output_dir>
-
-# Example
-./encrypt_tables input/plaintext/data_0_001 /tmp/encrypted_data
-```
-
-### Test Execution
-
-```bash
-# Run comparison tests against SQLite baseline
-./tests/integration/test_join input/queries/tpch_tb1.sql input/encrypted/data_0_001
-```
-
 ## SQL Query Format
 
-Queries should be standard SQL SELECT statements with joins:
+Queries are standard SQL SELECT statements. All tables must use the `AS` keyword for
+aliases:
 
 ```sql
--- Two-way join
-SELECT *
-FROM supplier1, supplier2
-WHERE supplier1.S1_S_ACCTBAL < supplier2.S2_S_ACCTBAL;
-
--- Three-way join
-SELECT *
-FROM T1, T2, T3
-WHERE T1.attr = T2.attr AND T2.attr = T3.attr;
+-- Two-hop chain
+SELECT * FROM account AS a1, txn AS t1, account AS a2, txn AS t2, account AS a3
+WHERE a1.account_id = t1.acc_from AND t1.acc_to = a2.account_id
+  AND a2.account_id = t2.acc_from AND t2.acc_to = a3.account_id
+  AND a1.account_id = 46;
 ```
+
+Graphite does not execute these directly. The decomposer rewrites each query into
+one-hop instances plus a residual query; both are saved under `decomposed/` in the
+results directory. The baselines execute the original query.
 
 ## Data Format
 
-Input data should be CSV files with:
+Input data is plaintext CSV with:
 - First row containing column names
 - Integer values only (system limitation)
 - Values within range [-1073741820, 1073741820]
 
-## Project Structure
+No encryption step is needed — TDX encrypts memory transparently.
 
+## Datasets
+
+### Synthetic banking data
+
+```bash
+python3 scripts/generate_banking_scaled.py <num_accounts> <output_dir> [options]
+
+# 1M accounts / 5M transactions
+python3 scripts/generate_banking_scaled.py 1000000 input/plaintext/banking_1M --seed 42
 ```
-impl/src/
-├── app/                 # Main application code
-│   ├── algorithms/      # Join algorithms
-│   ├── batch/          # Ecall batching system
-│   ├── crypto/         # Encryption utilities
-│   └── data_structures/ # Core data structures
-├── enclave/            # SGX enclave code
-├── common/             # Shared utilities
-└── test/               # Test suite
+
+### Real-world datasets
+
+These must be downloaded, then converted to the CSV layout above using the conversion
+scripts under `scripts/`:
+
+| Dataset | Nodes | Edges |
+|---------|-------|-------|
+| IBM AML HI-Small | 515K | 5.1M |
+| LDBC SNB SF30 | 165K | 12.0M |
+| SNAP cit-Patents | 3.8M | 16.5M |
+| IBM AML HI-Medium | 2.1M | 31.9M |
+| IBM AML HI-Large | 2.1M | 179.7M |
+
+
+See `docs/workloads.md` for download links and schemas.
+
+## Experiments
+
+Three experiments produce the measured results in the paper. Each script writes
+`raw_runs.csv`, `summary.csv`, `run_metadata.json`, and `binary_stdout.log` to its
+results directory, flushing after every cell so an interrupted run still leaves
+usable output. Our own results are checked in under `results/`.
+
+Three systems are compared. They differ in what they leak, which is why the two
+baselines are given the benefit of the doubt:
+
+| System | Intermediate sizes | Unfiltered output | Filtered output |
+|--------|--------------------|-------------------|-----------------|
+| Obliviator chained | revealed | revealed | revealed |
+| Full MWJ | hidden | revealed | revealed |
+| Graphite | hidden | hidden | revealed |
+
+Results were measured inside a TDX guest with 512 GB of RAM, 64 threads, and a
+one-hour budget per cell.
+`OOM` and `TIMEOUT` entries in the CSVs are expected
+results, not failures — they are the claim that baselines cannot complete these
+workloads. On a smaller machine the baselines will fail earlier and Graphite's
+latencies will rise, but the separation between them should hold.
+
+### Comparison on real-world datasets
+
+A 2-hop query across every dataset, comparing all three systems.
+
+```bash
+python3 scripts/experiments/run_e3_cross_dataset.py
 ```
 
-## Performance Optimizations
+```bash
+python3 scripts/experiments/run_e3_cross_dataset.py --datasets banking_1M,hi_small
+```
 
-- **Ecall Batching**: Reduces SGX transition overhead by batching operations
-- **Memory Pool**: Pre-allocated memory to avoid dynamic allocation
-- **Vectorized Operations**: SIMD optimizations where applicable
+To redraw the figure from the checked-in numbers, use `summary_all6.csv` instead of
+`summary.csv`.
 
-## Security Considerations
+Index construction times come from the one-hop drivers rather than this script:
 
-- All data processing occurs inside SGX enclaves
-- Memory access patterns are data-independent (oblivious)
-- Input/output data is AES-encrypted
-- No sensitive data in debug outputs
+```bash
+./obligraph/build/ibm_aml_onehop input/plaintext/ibm_aml_hi_small hop.csv \
+    --threads 64 --report OFFLINE
+```
+
+### Impact of graph density
+
+Four banking graphs with identical input size (1M accounts, 5M edges) and a fixed
+filtered output, varying only how edges concentrate on hubs. The graphs are generated
+automatically on first run.
+
+```bash
+python3 scripts/experiments/run_e5_density.py --tier 5M
+python3 scripts/experiments/plot_e5_density.py results/e5_density_5M/summary.csv
+```
+The plot is written as `e5_density.pdf` next to the summary you pass in.
+
+
+### Impact of query decomposition
+
+Full MWJ is given the same in-place filtering as Graphite, so the remaining gap is
+attributable to decomposition alone. The predicate threshold is swept so the filtered
+output spans 2.4K to 183M rows.
+
+```bash
+python3 scripts/experiments/run_e7_selectivity.py --measurement-runs 1 --warmup-runs 1
+python3 scripts/experiments/plot_e7_selectivity.py
+```
+
 
 ## Testing
 
-The project includes comprehensive tests:
-
 ```bash
-# Unit tests
-cd impl/src/test
-make
-./test_join <query> <data>
+# One-hop operator against a plaintext reference
+python3 tests/test_onehop_correctness.py input/plaintext/banking_1k obligraph/build/banking_onehop
 
-# Performance benchmarks
-./overhead_measurement
+# Full decomposed pipeline against a plaintext reference
+python3 tests/test_pipeline_correctness.py input/plaintext/banking_1k obligraph/build/banking_onehop ./sgx_app
+
+# Large-scale regression, verified against SQLite
+python3 scripts/generate_banking_scaled.py 200000 input/plaintext/banking_200k --seed 42
+python3 tests/test_large_scale_regression.py input/plaintext/banking_200k obligraph/build/banking_onehop ./sgx_app
 ```
+
+`make tests` builds the C++ test binaries, including `test_join`, which compares
+engine output against a SQLite baseline.
 
 ## Sample Data
 
-Small TPC-H datasets are included for testing:
-- `input/plaintext/data_0_001/` - Scale factor 0.001 (plaintext)
-- `input/encrypted/data_0_001/` - Scale factor 0.001 (encrypted)
-- `input/plaintext/data_0_01/` - Scale factor 0.01 (plaintext)
-- `input/encrypted/data_0_01/` - Scale factor 0.01 (encrypted)
-
-## Generating Account Datasets
-
-The project includes a parameterized generator for creating banking datasets of varying sizes.
-
-### Basic Usage
-
-```bash
-python3 scripts/generate_banking_scaled.py <num_accounts> <output_dir>
-
-# Examples with different sizes
-python3 scripts/generate_banking_scaled.py 1000 input/plaintext/banking_1000
-python3 scripts/generate_banking_scaled.py 5000 input/plaintext/banking_5000
-python3 scripts/generate_banking_scaled.py 10000 input/plaintext/banking_10000
-python3 scripts/generate_banking_scaled.py 50000 input/plaintext/banking_50000
-```
-
-### Generating Large Datasets (1M+ accounts)
-
-For large datasets, use `--streaming` mode to reduce memory usage:
-
-```bash
-# Generate 1 million accounts (~250 MB output)
-python3 scripts/generate_banking_scaled.py 1000000 input/plaintext/banking_scaled/banking_1M --streaming
-
-# Generate 2 million accounts (~500 MB output)
-python3 scripts/generate_banking_scaled.py 2000000 input/plaintext/banking_scaled/banking_2M --streaming
-
-# Generate 5 million accounts (~1.25 GB output)
-python3 scripts/generate_banking_scaled.py 5000000 input/plaintext/banking_scaled/banking_5M --streaming
-
-# Generate 10 million accounts (~2.5 GB output)
-python3 scripts/generate_banking_scaled.py 10000000 input/plaintext/banking_scaled/banking_10M --streaming
-```
-
-### Batch Generation (Parallel)
-
-Generate multiple datasets in parallel using the batch script:
-
-```bash
-# Generate all 4 large datasets (1M, 2M, 5M, 10M) with 4 parallel workers
-python3 scripts/generate_banking_batch.py --output-base input/plaintext/banking_scaled --workers 4
-```
-
-### Command-Line Options
-
-| Option | Description |
-|--------|-------------|
-| `<num_accounts>` | Number of accounts to generate (required) |
-| `<output_dir>` | Output directory path (required) |
-| `--seed <int>` | Random seed for reproducibility (default: 42 + num_accounts) |
-| `--streaming` | Use streaming mode for large datasets (writes directly to disk) |
-| `--quiet`, `-q` | Suppress detailed output (useful for parallel execution) |
-
-### Custom Seeds for Reproducibility
-
-```bash
-# Same seed produces identical data
-python3 scripts/generate_banking_scaled.py 5000 output1 --seed 12345
-python3 scripts/generate_banking_scaled.py 5000 output2 --seed 12345  # Identical to output1
-
-# Different seeds produce different data
-python3 scripts/generate_banking_scaled.py 5000 output3 --seed 99999  # Different data
-```
-
-### Generated Tables
-
-| Table | Rows | Columns |
-|-------|------|---------|
-| owner.csv | num_accounts / 5 | ow_id, name_placeholder |
-| account.csv | num_accounts | account_id, balance, owner_id |
-| txn.csv | 5 × num_accounts | acc_from, acc_to, amount, txn_time |
-
-### Dataset Size Reference
-
-| Accounts | Owners | Transactions | Approx. Size |
-|----------|--------|--------------|--------------|
-| 1,000 | 200 | 5,000 | ~250 KB |
-| 10,000 | 2,000 | 50,000 | ~2.5 MB |
-| 100,000 | 20,000 | 500,000 | ~25 MB |
-| 1,000,000 | 200,000 | 5,000,000 | ~250 MB |
-| 10,000,000 | 2,000,000 | 50,000,000 | ~2.5 GB |
-
-### Pre-generated Banking Datasets
-
-- `input/plaintext/banking/` - Default dataset (10,000 accounts)
-- `input/plaintext/banking_small/` - Small test dataset (100 accounts)
+- `input/plaintext/banking_1k/` — 200 accounts, 1,000 transactions; used by the correctness tests
+- `input/plaintext/banking/` — 10,000 accounts, 50,000 transactions
+- `input/plaintext/data_0_001/` — TPC-H scale factor 0.001
 
 ## Limitations
 
-- Currently supports only integer data types
-- Maximum value range: [-1073741820, 1073741820]
-- Requires Intel SGX hardware for secure execution
+- Integer data types only; values must fall within [-1073741820, 1073741820]
 
 ## License
 
-[MIT License](LICENSE)
-
-## Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@inproceedings{oblivious-join-2024,
-  title={Oblivious Multi-Way Joins with Constant Memory Overhead},
-  author={[Authors]},
-  booktitle={[Conference]},
-  year={2024}
-}
-```
+To be added.
 
 ## Contact
 
-For questions or issues, please open a GitHub issue or contact the authors.
+For questions or issues, please open a GitHub issue.
