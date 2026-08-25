@@ -61,6 +61,12 @@ Graphite does not execute these directly. The decomposer rewrites each query int
 one-hop instances plus a residual query; both are saved under `decomposed/` in the
 results directory. The baselines execute the original query.
 
+Every query used in the experiments is checked in under
+[`input/queries/`](https://github.com/ImperishableMe/graphite/tree/main/input/queries):
+the 1- to 5-hop chains for each workload (`banking_*`, `aml_*`, `snb_*`, `snap_*`),
+the non-chain query shapes (`aml_fanin`, `aml_fanout`, `aml_tree`), and the
+13-point selectivity sweep (`aml_2hop_sel_*`).
+
 ## Data Format
 
 Input data is plaintext CSV with:
