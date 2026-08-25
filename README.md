@@ -62,7 +62,7 @@ one-hop instances plus a residual query; both are saved under `decomposed/` in t
 results directory. The baselines execute the original query.
 
 Every query used in the experiments is checked in under
-[`input/queries/`](https://github.com/ImperishableMe/graphite/tree/main/input/queries):
+[`input/queries/`](input/queries):
 the 1- to 5-hop chains for each workload (`banking_*`, `aml_*`, `snb_*`, `snap_*`),
 the non-chain query shapes (`aml_fanin`, `aml_fanout`, `aml_tree`), and the
 13-point selectivity sweep (`aml_2hop_sel_*`).
