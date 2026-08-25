@@ -196,7 +196,7 @@ engine output against a SQLite baseline.
 
 ## License
 
-To be added.
+[MIT License](LICENSE), covering the code authored in this repository.
 
 ## Contact
 
